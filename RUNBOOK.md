@@ -1,6 +1,6 @@
 # CI/CD Pipeline with Jenkins — Runbook
 
-> **Stack:** Node.js app · Jenkins in Docker on EC2 · Docker Hub · SSH deploy
+> **Stack:** Node.js app · Jenkins in Docker on EC2 · Docker Hub · SSH deploy for GitOps
 >
 > ⚠️ **IP addresses change on every EC2 restart.** Check `infrastructure-outputs.txt` (or run `terraform output`) for the current IPs before each session. Replace `<JENKINS_IP>` and `<APP_IP>` throughout this guide with those values.
 
