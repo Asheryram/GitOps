@@ -1,0 +1,34 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS Access Key"
+regex = '''AKIA[0-9A-Z]{16}'''
+tags = ["key", "AWS"]
+
+[[rules]]
+id = "aws-secret-key"
+description = "AWS Secret Key"
+regex = '''[0-9a-zA-Z/+]{40}'''
+tags = ["key", "AWS"]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|apikey)['"]*\s*[:=]\s*['"][0-9a-zA-Z]{32,}['"]'''
+tags = ["key", "API"]
+
+[allowlist]
+description = "Allowlist for false positives"
+paths = [
+    '''\.git/''',
+    '''node_modules/''',
+    '''coverage/''',
+    '''\.terraform/''',
+    '''screenshots/'''
+]
+
+commits = [
+    "allowlist-commit-hash"
+]

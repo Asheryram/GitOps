@@ -1,0 +1,16 @@
+format: json
+output: trivy-report.json
+severity:
+  - HIGH
+  - CRITICAL
+vuln-type:
+  - os
+  - library
+security-checks:
+  - vuln
+  - secret
+  - config
+ignore-unfixed: false
+exit-code: 1
+timeout: 10m
+cache-dir: /tmp/trivy-cache

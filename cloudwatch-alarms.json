@@ -1,0 +1,96 @@
+{
+  "alarms": [
+    {
+      "AlarmName": "ECS-Service-CPUUtilization-High",
+      "AlarmDescription": "ECS Service CPU utilization is too high",
+      "MetricName": "CPUUtilization",
+      "Namespace": "AWS/ECS",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 80,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "Dimensions": [
+        {
+          "Name": "ServiceName",
+          "Value": "cicd-service"
+        },
+        {
+          "Name": "ClusterName", 
+          "Value": "cicd-cluster"
+        }
+      ],
+      "AlarmActions": [
+        "${SNS_TOPIC_ARN}"
+      ]
+    },
+    {
+      "AlarmName": "ECS-Service-MemoryUtilization-High",
+      "AlarmDescription": "ECS Service memory utilization is too high",
+      "MetricName": "MemoryUtilization",
+      "Namespace": "AWS/ECS",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 85,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "Dimensions": [
+        {
+          "Name": "ServiceName",
+          "Value": "cicd-service"
+        },
+        {
+          "Name": "ClusterName",
+          "Value": "cicd-cluster"
+        }
+      ],
+      "AlarmActions": [
+        "${SNS_TOPIC_ARN}"
+      ]
+    },
+    {
+      "AlarmName": "ECS-Service-RunningTaskCount-Low",
+      "AlarmDescription": "ECS Service has too few running tasks",
+      "MetricName": "RunningTaskCount",
+      "Namespace": "AWS/ECS",
+      "Statistic": "Average",
+      "Period": 60,
+      "EvaluationPeriods": 2,
+      "Threshold": 1,
+      "ComparisonOperator": "LessThanThreshold",
+      "Dimensions": [
+        {
+          "Name": "ServiceName",
+          "Value": "cicd-service"
+        },
+        {
+          "Name": "ClusterName",
+          "Value": "cicd-cluster"
+        }
+      ],
+      "AlarmActions": [
+        "${SNS_TOPIC_ARN}"
+      ]
+    },
+    {
+      "AlarmName": "ALB-TargetResponseTime-High",
+      "AlarmDescription": "Application Load Balancer response time is too high",
+      "MetricName": "TargetResponseTime",
+      "Namespace": "AWS/ApplicationELB",
+      "Statistic": "Average",
+      "Period": 300,
+      "EvaluationPeriods": 2,
+      "Threshold": 2,
+      "ComparisonOperator": "GreaterThanThreshold",
+      "Dimensions": [
+        {
+          "Name": "LoadBalancer",
+          "Value": "${LOAD_BALANCER_NAME}"
+        }
+      ],
+      "AlarmActions": [
+        "${SNS_TOPIC_ARN}"
+      ]
+    }
+  ]
+}
