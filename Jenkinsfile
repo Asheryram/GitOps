@@ -168,9 +168,7 @@ pipeline {
             steps {
                 echo 'Pushing image to Amazon ECR...'
                 script {
-                    sh '''
-                        aws sts get-caller-identity'''
-                // pushToECR()
+                pushToECR()
                 }
             }
         }
