@@ -51,6 +51,13 @@ resource "aws_iam_role_policy" "jenkins_secrets_access" {
         Resource = [
           aws_secretsmanager_secret.jenkins_admin_password2.arn
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
       }
     ]
   })

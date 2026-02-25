@@ -356,25 +356,6 @@ def analyzeTrivyReport() {
     echo 'Container scan passed'
 }
 
-def getAWSConfig() {
-    return [credentials: 'aws-credentials', region: 'eu-central-1']
-}
-
-// def pushToECR() {
-//     withAWS(credentials: 'aws-credentials') {
-//         sh '''
-//             aws ecr get-login-password --region $AWS_REGION | \
-//                 docker login --username AWS --password-stdin $ECR_REGISTRY
-
-//             docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-//             docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
-
-//             docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-//             docker push $ECR_REGISTRY/$ECR_REPO:latest
-//         '''
-//     }
-// }
-
 def pushToECR() {
     sh '''
         echo "Logging in to ECR..."
@@ -392,7 +373,6 @@ def pushToECR() {
 }
 
 def updateECSTaskDefinition() {
-    withAWS(getAWSConfig()) {
         sh '''
             aws ecs describe-task-definition \
                 --task-definition $ECS_TASK_FAMILY \
@@ -411,11 +391,10 @@ def updateECSTaskDefinition() {
 
             echo "Registered new task definition revision: $(cat task-revision.txt)"
         '''
-    }
+    
 }
 
 def deployToECS() {
-    withAWS(getAWSConfig()) {
         def taskRevision = sh(script: 'cat task-revision.txt', returnStdout: true).trim()
 
         sh """
@@ -432,11 +411,10 @@ def deployToECS() {
 
             echo "ECS service updated successfully"
         """
-    }
+    
 }
 
 def verifyDeployment() {
-    withAWS(getAWSConfig()) {
         sh '''
             SERVICE_STATUS=$(aws ecs describe-services \
                 --cluster $ECS_CLUSTER \
@@ -466,11 +444,10 @@ def verifyDeployment() {
                 exit 1
             fi
         '''
-    }
+    
 }
 
 def cleanupOldImages() {
-    withAWS(getAWSConfig()) {
         sh '''
             OLD_IMAGES=$(aws ecr list-images \
                 --repository-name $ECR_REPO \
@@ -488,7 +465,6 @@ def cleanupOldImages() {
                 echo "No old images to clean up"
             fi
         '''
-    }
 }
 
 def getUnstableConfig() {
