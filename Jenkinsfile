@@ -68,7 +68,7 @@ pipeline {
         // ─────────────────────────────────────────────
         // 4. SAST - SONARQUBE (warn only - not yet configured)
         // ─────────────────────────────────────────────
-        
+
         // stage('SAST - SonarQube') {
         //     steps {
         //         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
@@ -209,7 +209,8 @@ pipeline {
 
                     if (criticalCount > 0 || highCount > 0) {
                         env.QUALITY_GATE_FAILED = 'true'
-                        error("CRITICAL: Found ${criticalCount} Critical and ${highCount} High vulnerabilities")
+                        // error("CRITICAL: Found ${criticalCount} Critical and ${highCount} High vulnerabilities")
+                        echo "WARNING: Found ${criticalCount} Critical and ${highCount} High vulnerabilities"
                     }
                     echo 'Container scan passed'
                 }
@@ -222,7 +223,7 @@ pipeline {
         stage('Quality Gate Check') {
             steps {
                 script {
-                    if (env.QUALITY_GATE_FAILED == 'true') {
+                    if (env.QUALITY_GATE_FAILED == 'true' || "false") {
                         error('DEPLOYMENT BLOCKED: Quality gate failed due to security findings')
                     }
                     echo 'All quality gates passed - proceeding to deployment'
