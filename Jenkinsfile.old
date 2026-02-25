@@ -29,7 +29,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 2. SECRET SCANNING (warn only - does not block)
+        // 2. SECRET SCANNING
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
@@ -46,12 +46,11 @@ pipeline {
                     if (fileExists('gitleaks-report.json')) {
                         def report = readJSON file: 'gitleaks-report.json'
                         if (report && report.size() > 0) {
-                            echo "WARNING: ${report.size()} secret(s) detected - review gitleaks-report.json"
-                            unstable('Secret scanning found potential secrets - pipeline continues but marked unstable')
-                        } else {
-                            echo 'No secrets detected'
+                            env.QUALITY_GATE_FAILED = 'true'
+                            error("CRITICAL: Secrets detected! Found ${report.size()} secret(s)")
                         }
                     }
+                    echo 'No secrets detected'
                 }
             }
         }
@@ -394,6 +393,7 @@ pipeline {
                 reportName: 'Trivy Security Report'
             ])
             
+            // Single quotes prevent Groovy interpolation of secrets
             sh '''
                 docker rmi $ECR_REPO:$BUILD_NUMBER || true
                 docker rmi $ECR_REPO:latest || true
