@@ -12,10 +12,10 @@ resource "aws_key_pair" "main" {
   }
 }
 
-resource "aws_secretsmanager_secret" "private_key" {
+resource "aws_secretsmanager_secret" "private_key2" {
   name                    = "${var.project_name}-${var.environment}-ssh-private-key"
   description             = "SSH private key for ${var.project_name}-${var.environment} EC2 instances"
-  recovery_window_in_days = 7
+  recovery_window_in_days = 0
 
   tags = {
     Name = "${var.project_name}-${var.environment}-ssh-private-key"
@@ -23,6 +23,6 @@ resource "aws_secretsmanager_secret" "private_key" {
 }
 
 resource "aws_secretsmanager_secret_version" "private_key" {
-  secret_id     = aws_secretsmanager_secret.private_key.id
+  secret_id     = aws_secretsmanager_secret.private_key2.id
   secret_string = tls_private_key.main.private_key_pem
 }

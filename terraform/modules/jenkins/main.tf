@@ -1,8 +1,8 @@
 # Store Jenkins admin password in Secrets Manager
-resource "aws_secretsmanager_secret" "jenkins_admin_password" {
+resource "aws_secretsmanager_secret" "jenkins_admin_password2" {
   name                    = "${var.project_name}-${var.environment}-jenkins-admin-password"
   description             = "Jenkins admin password for ${var.project_name}-${var.environment}"
-  recovery_window_in_days = 7
+  recovery_window_in_days = 0
 
   tags = {
     Name = "${var.project_name}-${var.environment}-jenkins-admin-password"
@@ -10,7 +10,7 @@ resource "aws_secretsmanager_secret" "jenkins_admin_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "jenkins_admin_password" {
-  secret_id     = aws_secretsmanager_secret.jenkins_admin_password.id
+  secret_id     = aws_secretsmanager_secret.jenkins_admin_password2.id
   secret_string = var.jenkins_admin_password
 }
 
@@ -49,7 +49,7 @@ resource "aws_iam_role_policy" "jenkins_secrets_access" {
           "secretsmanager:GetSecretValue"
         ]
         Resource = [
-          aws_secretsmanager_secret.jenkins_admin_password.arn
+          aws_secretsmanager_secret.jenkins_admin_password2.arn
         ]
       }
     ]

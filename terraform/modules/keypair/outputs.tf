@@ -5,12 +5,12 @@ output "key_name" {
 
 output "private_key_secret_arn" {
   description = "ARN of the Secrets Manager secret containing the SSH private key"
-  value       = aws_secretsmanager_secret.private_key.arn
+  value       = aws_secretsmanager_secret.private_key2.arn
 }
 
 output "private_key_secret_name" {
   description = "Name of the Secrets Manager secret containing the SSH private key"
-  value       = aws_secretsmanager_secret.private_key.name
+  value       = aws_secretsmanager_secret.private_key2.name
 }
 
 output "public_key_openssh" {
