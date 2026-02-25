@@ -168,7 +168,9 @@ pipeline {
             steps {
                 echo 'Pushing image to Amazon ECR...'
                 script {
-                    pushToECR()
+                    sh '''
+                        aws sts get-caller-identity'''
+                // pushToECR()
                 }
             }
         }
@@ -280,8 +282,8 @@ pipeline {
         failure {
             echo 'Pipeline failed!'
             script {
-                def failureReason = (env.QUALITY_GATE_FAILED == 'true') ? 
-                    'SECURITY GATE FAILURE - Deployment blocked due to security findings' : 
+                def failureReason = (env.QUALITY_GATE_FAILED == 'true') ?
+                    'SECURITY GATE FAILURE - Deployment blocked due to security findings' :
                     'BUILD FAILURE - Check logs for technical issues'
                 echo failureReason
             }
@@ -383,8 +385,8 @@ def updateECSTaskDefinition() {
                 --query 'taskDefinition' > current-task-def.json
 
             jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER" \
-                '.containerDefinitions[0].image = $IMAGE | 
-                del(.taskDefinitionArn, .revision, .status, .requiresAttributes, 
+                '.containerDefinitions[0].image = $IMAGE |
+                del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                 .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
                 current-task-def.json > new-task-def.json
 
