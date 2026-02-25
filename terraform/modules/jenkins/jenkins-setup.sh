@@ -5,17 +5,23 @@ exec 2>&1
 
 echo "Starting Jenkins Docker setup at $(date)"
 
-# Install Docker
+# ────────────────
+# 1. Install Docker on host
+# ────────────────
 sudo yum update -y
-sudo yum install -y docker git
+sudo yum install -y docker git unzip curl
 sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -a -G docker ec2-user
 
-# Create Docker network
+# ────────────────
+# 2. Create Docker network
+# ────────────────
 sudo docker network create jenkins || true
 
-# Run Docker-in-Docker container
+# ────────────────
+# 3. Run Docker-in-Docker container
+# ────────────────
 sudo docker run --name jenkins-docker --rm --detach \
   --privileged --network jenkins --network-alias docker \
   --env DOCKER_TLS_CERTDIR=/certs \
@@ -24,17 +30,31 @@ sudo docker run --name jenkins-docker --rm --detach \
   --publish 2376:2376 \
   docker:dind --storage-driver overlay2
 
-# Build custom Jenkins image with Docker CLI
-echo "Building custom Jenkins image with Docker CLI..."
+# ────────────────
+# 4. Build custom Jenkins image with Docker CLI, AWS CLI, SonarScanner
+# ────────────────
+echo "Building custom Jenkins image with Docker CLI, AWS CLI, SonarScanner..."
 sudo docker build -t jenkins-with-docker - <<'EOF'
 FROM jenkins/jenkins:2.541.2-jdk21
 USER root
 
-# Install Docker CLI
+# Install basic tools + Docker CLI + jq
 RUN apt-get update && \
-    apt-get install -y docker.io && \
+    apt-get install -y docker.io wget unzip curl jq && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Install AWS CLI v2
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
+# Install SonarScanner
+RUN wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip && \
+    unzip sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt/ && \
+    ln -s /opt/sonar-scanner-5.0.1.3006-linux/bin/sonar-scanner /usr/local/bin/sonar-scanner && \
+    chmod -R 755 /opt/sonar-scanner-5.0.1.3006-linux
 
 # Install Jenkins plugins
 RUN jenkins-plugin-cli --plugins \
@@ -51,7 +71,9 @@ RUN jenkins-plugin-cli --plugins \
 USER jenkins
 EOF
 
-# Run Jenkins container with custom image
+# ────────────────
+# 5. Run Jenkins container with custom image
+# ────────────────
 echo "Starting Jenkins container..."
 sudo docker run --name jenkins --restart=on-failure --detach \
   --network jenkins \
@@ -64,7 +86,9 @@ sudo docker run --name jenkins --restart=on-failure --detach \
   --volume jenkins-docker-certs:/certs/client:ro \
   jenkins-with-docker
 
-# Wait for Jenkins to start
+# ────────────────
+# 6. Wait for Jenkins to start
+# ────────────────
 echo "Waiting for Jenkins to start..."
 for i in $(seq 1 30); do
   if curl -s http://localhost:8080 > /dev/null; then
@@ -75,27 +99,23 @@ for i in $(seq 1 30); do
   sleep 10
 done
 
-# Prepare sonarqube installation inside jenkins container
-docker exec -it -u root jenkins bash
-apt-get update
-apt-get install -y wget unzip
-
-wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip && \
-unzip sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt/ && \
-ln -s /opt/sonar-scanner-5.0.1.3006-linux/bin/sonar-scanner /usr/local/bin/sonar-scanner && \
-chmod -R 755 /opt/sonar-scanner-5.0.1.3006-linux && \
-sonar-scanner --version
-
-# Print initial admin password
+# ────────────────
+# 7. Print initial admin password
+# ────────────────
 echo "Waiting for initial admin password to be generated..."
 sleep 30
 echo "==================== JENKINS ADMIN PASSWORD ===================="
 sudo docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword || echo "Password not yet available - check manually later"
 echo "================================================================"
 
+# ────────────────
+# 8. Setup summary
+# ────────────────
 echo "==================== SETUP SUMMARY ===================="
-echo "Jenkins running in Docker with Docker CLI installed"
+echo "Jenkins running in Docker with Docker CLI, AWS CLI, SonarScanner installed"
 echo "Docker version: $(docker --version)"
+echo "AWS CLI version: $(aws --version)"
+echo "SonarScanner version: $(sonar-scanner --version || echo 'Check inside container')"
 echo "======================================================="
 echo "Jenkins setup completed at $(date)"
 
