@@ -42,3 +42,55 @@ output "ssh_app_server" {
   description = "SSH command for application server (retrieve key from Secrets Manager first)"
   value       = "ssh -i <private-key-file> ec2-user@${module.app_server.public_ip}"
 }
+
+# ECR Outputs
+output "ecr_repository_url" {
+  description = "ECR repository URL"
+  value       = module.ecr.repository_url
+}
+
+output "ecr_repository_name" {
+  description = "ECR repository name"
+  value       = module.ecr.repository_name
+}
+
+# ECS Outputs
+output "ecs_cluster_name" {
+  description = "ECS cluster name"
+  value       = module.ecs.cluster_name
+}
+
+output "ecs_task_execution_role_arn" {
+  description = "ECS task execution role ARN"
+  value       = module.ecs.task_execution_role_arn
+}
+
+output "ecs_task_role_arn" {
+  description = "ECS task role ARN"
+  value       = module.ecs.task_role_arn
+}
+
+output "ecs_log_group_name" {
+  description = "ECS CloudWatch log group name"
+  value       = module.ecs.log_group_name
+}
+
+output "ecs_service_security_group_id" {
+  description = "ECS service security group ID"
+  value       = module.ecs.service_security_group_id
+}
+
+output "ecs_service_name" {
+  description = "ECS service name"
+  value       = module.ecs.service_name
+}
+
+output "ecs_task_definition_family" {
+  description = "ECS task definition family"
+  value       = module.ecs.task_definition_family
+}
+
+output "public_subnets" {
+  description = "Public subnet IDs for ECS service"
+  value       = module.vpc.public_subnets
+}

@@ -98,3 +98,23 @@ module "app_server" {
   security_group_ids = [module.security_groups.app_sg_id]
   user_data          = file("${path.module}/scripts/app-server-setup.sh")
 }
+
+# ECR Module
+module "ecr" {
+  source = "./modules/ecr"
+
+  project_name = var.project_name
+  environment  = var.environment
+}
+
+# ECS Module
+module "ecs" {
+  source = "./modules/ecs"
+
+  project_name       = var.project_name
+  environment        = var.environment
+  vpc_id             = module.vpc.vpc_id
+  public_subnets     = module.vpc.public_subnets
+  ecr_repository_url = module.ecr.repository_url
+  aws_region         = var.aws_region
+}

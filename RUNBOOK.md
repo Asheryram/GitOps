@@ -10,16 +10,18 @@
 
 1. [Architecture Overview](#1-architecture-overview)
 2. [Repository Structure](#2-repository-structure)
-3. [Jenkins Server — First-Time Setup](#3-jenkins-server--first-time-setup)
-4. [Configure the App Server](#4-configure-the-app-server)
-5. [Get the Initial Admin Password](#5-get-the-initial-admin-password)
-6. [Install Jenkins Plugins](#6-install-jenkins-plugins)
-7. [Add Jenkins Credentials](#7-add-jenkins-credentials)
-8. [Create the Pipeline Job](#8-create-the-pipeline-job)
-9. [Run the Pipeline](#9-run-the-pipeline)
-10. [Verify Deployment](#10-verify-deployment)
-11. [Updating the App Server IP](#11-updating-the-app-server-ip)
-12. [Troubleshooting](#12-troubleshooting)
+3. [Initial Deployment](#3-initial-deployment)
+4. [Jenkins Server — First-Time Setup](#4-jenkins-server--first-time-setup)
+5. [Configure the App Server](#5-configure-the-app-server)
+6. [Get the Initial Admin Password](#6-get-the-initial-admin-password)
+7. [Install Jenkins Plugins](#7-install-jenkins-plugins)
+8. [Add Jenkins Credentials](#8-add-jenkins-credentials)
+9. [Create the Pipeline Job](#9-create-the-pipeline-job)
+10. [Run the Pipeline](#10-run-the-pipeline)
+11. [Verify Deployment](#11-verify-deployment)
+12. [Application Deployment Procedures](#12-application-deployment-procedures)
+13. [Updating the App Server IP](#13-updating-the-app-server-ip)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -66,7 +68,47 @@ cd terraform && terraform output
 
 ---
 
-## 3. Jenkins Server — First-Time Setup
+## 3. Initial Deployment
+
+### Prerequisites
+- AWS CLI configured (`aws configure`)
+- Terraform installed
+- Docker Hub account
+- Your public IP (`curl ifconfig.me`)
+
+### Deploy Infrastructure
+
+```bash
+# 1. Configure Terraform
+cd terraform
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your IP and credentials
+
+# 2. Deploy
+terraform init
+terraform apply
+
+# 3. Save outputs
+terraform output > ../infrastructure-outputs.txt
+```
+
+### Get Connection Details
+
+```bash
+# Jenkins URL
+echo "Jenkins: http://$(terraform output -raw jenkins_public_ip):8080"
+
+# App URL (after deployment)
+echo "App: http://$(terraform output -raw app_server_public_ip):5000"
+
+# SSH commands
+echo "SSH Jenkins: ssh -i $(terraform output -raw key_name).pem ec2-user@$(terraform output -raw jenkins_public_ip)"
+echo "SSH App: ssh -i $(terraform output -raw key_name).pem ec2-user@$(terraform output -raw app_server_public_ip)"
+```
+
+---
+
+## 4. Jenkins Server — First-Time Setup
 
 Jenkins is provisioned automatically by Terraform via `jenkins-setup.sh` (in `terraform/modules/jenkins/`) as EC2 `user_data`. **You do not need to run anything manually** — by the time the instance is reachable, the script has already:
 
@@ -90,7 +132,7 @@ sudo cat /var/log/jenkins-setup.log
 
 ---
 
-## 4. Configure the App Server
+## 5. Configure the App Server
 
 The app server only needs Docker. SSH in and run:
 
@@ -107,7 +149,7 @@ exit   # log out so the group change takes effect
 
 ---
 
-## 5. Get the Initial Admin Password
+## 6. Get the Initial Admin Password
 
 Jenkins generates a one-time password on first boot. Because Jenkins runs inside a container, retrieve it with `docker exec` — **not** from the host filesystem:
 
@@ -121,7 +163,7 @@ sudo docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 
 ---
 
-## 6. Install Jenkins Plugins
+## 7. Install Jenkins Plugins
 
 1. Open **`http://<JENKINS_IP>:8080`** in your browser.
 2. Paste the initial admin password from the step above.
@@ -154,7 +196,7 @@ Click **Save**.
 
 ---
 
-## 7. Add Jenkins Credentials
+## 8. Add Jenkins Credentials
 
 Navigate to: **Manage Jenkins → Credentials → System → Global credentials → Add Credential**
 
@@ -188,7 +230,7 @@ Paste everything including the `-----BEGIN` and `-----END` lines.
 
 ---
 
-## 8. Create the Pipeline Job
+## 9. Create the Pipeline Job
 
 ### Update the app server IP in the Jenkinsfile
 
@@ -232,7 +274,7 @@ Click **Save**.
 
 ---
 
-## 9. Run the Pipeline
+## 10. Run the Pipeline
 
 1. Click **"Build Now"** on the job page.
 2. Click the build number in Build History.
@@ -259,7 +301,7 @@ Pipeline SUCCEEDED. App running at http://<APP_IP>:5000
 
 ---
 
-## 10. Verify Deployment
+## 11. Verify Deployment
 
 ```bash
 curl http://<APP_IP>:5000
@@ -277,7 +319,117 @@ docker logs cicd-app -f      # live app logs
 
 ---
 
-## 11. Updating the App Server IP
+## 12. Application Deployment Procedures
+
+### Standard Deployment Workflow
+
+```bash
+# 1. Make code changes
+vim app.js
+
+# 2. Test locally
+npm test
+
+# 3. Commit and push
+git add .
+git commit -m "feat: add new feature"
+git push origin main
+
+# 4. Trigger Jenkins pipeline
+# - Automatic (if webhook configured)
+# - Manual: Jenkins → cicd-pipeline → Build Now
+```
+
+### Manual Deployment (Emergency)
+
+```bash
+# SSH to app server
+ssh -i <keypair>.pem ec2-user@<APP_IP>
+
+# Stop current container
+docker stop cicd-app && docker rm cicd-app
+
+# Pull and run latest
+docker pull <dockerhub-username>/cicd-app:latest
+docker run -d --name cicd-app -p 5000:5000 <dockerhub-username>/cicd-app:latest
+
+# Verify
+curl localhost:5000/health
+```
+
+### Rollback Deployment
+
+```bash
+# SSH to app server
+ssh -i <keypair>.pem ec2-user@<APP_IP>
+
+# Stop current version
+docker stop cicd-app && docker rm cicd-app
+
+# Run previous version (replace N with build number)
+docker run -d --name cicd-app -p 5000:5000 <dockerhub-username>/cicd-app:N
+
+# Verify rollback
+curl localhost:5000/api/info
+```
+
+### Blue-Green Deployment
+
+```bash
+# SSH to app server
+ssh -i <keypair>.pem ec2-user@<APP_IP>
+
+# Start new version on different port
+docker run -d --name cicd-app-green -p 5001:5000 <dockerhub-username>/cicd-app:latest
+
+# Test new version
+curl localhost:5001/health
+
+# Switch traffic (stop blue, start green on main port)
+docker stop cicd-app
+docker run -d --name cicd-app-new -p 5000:5000 <dockerhub-username>/cicd-app:latest
+
+# Cleanup
+docker rm cicd-app cicd-app-green
+docker rename cicd-app-new cicd-app
+```
+
+### Deployment Verification Checklist
+
+```bash
+# Health check
+curl http://<APP_IP>:5000/health
+# Expected: {"status":"healthy"}
+
+# Version check
+curl http://<APP_IP>:5000/api/info
+# Expected: {"version":"1.0.0","deploymentTime":"..."}
+
+# Container status
+ssh -i <keypair>.pem ec2-user@<APP_IP> "docker ps"
+# Expected: cicd-app container running
+
+# Application logs
+ssh -i <keypair>.pem ec2-user@<APP_IP> "docker logs cicd-app --tail 20"
+# Expected: No errors, server started messages
+```
+
+### Deployment Monitoring
+
+```bash
+# Real-time logs
+ssh -i <keypair>.pem ec2-user@<APP_IP> "docker logs cicd-app -f"
+
+# Resource usage
+ssh -i <keypair>.pem ec2-user@<APP_IP> "docker stats cicd-app --no-stream"
+
+# Container details
+ssh -i <keypair>.pem ec2-user@<APP_IP> "docker inspect cicd-app"
+```
+
+---
+
+## 13. Updating the App Server IP
 
 Every time EC2 instances are stopped and restarted, both IPs change. Checklist:
 
@@ -292,7 +444,7 @@ The Jenkins UI URL also changes — always derive it from the current `<JENKINS_
 
 ---
 
-## 12. Troubleshooting
+## 14. Troubleshooting
 
 ### Jenkins container is not running
 
