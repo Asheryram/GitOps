@@ -13,12 +13,12 @@ resource "aws_key_pair" "main" {
 }
 
 resource "aws_secretsmanager_secret" "private_key2" {
-  name                    = "${var.project_name}-${var.environment}-ssh-private-key"
+  name                    = "${var.project_name}-${var.environment}-ssh-private-key-v2"
   description             = "SSH private key for ${var.project_name}-${var.environment} EC2 instances"
   recovery_window_in_days = 0
 
   tags = {
-    Name = "${var.project_name}-${var.environment}-ssh-private-key"
+    Name = "${var.project_name}-${var.environment}-ssh-private-key-v2"
   }
 }
 

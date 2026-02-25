@@ -7,7 +7,7 @@ pipeline {
 
     environment {
         AWS_ACCOUNT_ID = credentials('aws-account-id')
-        AWS_REGION = 'us-east-1'
+        AWS_REGION = 'eu-central-1'
         ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         ECR_REPO = 'cicd-node-app'
         IMAGE_TAG = "${BUILD_NUMBER}"
@@ -18,13 +18,20 @@ pipeline {
     }
     
     stages {
+
+        // ─────────────────────────────────────────────
+        // 1. CHECKOUT
+        // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 echo 'Checking out code...'
                 checkout scm
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 2. SECRET SCANNING
+        // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
                 echo 'Scanning for secrets with Gitleaks...'
@@ -48,14 +55,20 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 3. INSTALL DEPENDENCIES
+        // ─────────────────────────────────────────────
         stage('Install Dependencies') {
             steps {
                 echo 'Installing dependencies...'
                 sh 'npm ci'
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 4. SAST - SONARQUBE
+        // ─────────────────────────────────────────────
         stage('SAST - SonarQube') {
             steps {
                 echo 'Running SAST with SonarQube...'
@@ -80,13 +93,18 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 5. SCA - DEPENDENCY CHECK
+        // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
                 echo 'Running SCA with npm audit and Snyk...'
                 script {
                     sh '''
                         npm audit --json > npm-audit-report.json || true
+                        
+                        AUDIT_EXIT=0
                         npm audit --audit-level=high || AUDIT_EXIT=$?
                         
                         if [ "$AUDIT_EXIT" != "0" ]; then
@@ -98,6 +116,8 @@ pipeline {
                     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
                         sh '''
                             npx snyk test --json > snyk-report.json || true
+                            
+                            SNYK_EXIT=0
                             npx snyk test --severity-threshold=high || SNYK_EXIT=$?
                             
                             if [ "$SNYK_EXIT" != "0" ]; then
@@ -110,14 +130,20 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 6. UNIT TESTS
+        // ─────────────────────────────────────────────
         stage('Unit Tests') {
             steps {
                 echo 'Running unit tests...'
                 sh 'npm test'
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 7. BUILD DOCKER IMAGE
+        // ─────────────────────────────────────────────
         stage('Build Docker Image') {
             steps {
                 echo 'Building Docker image...'
@@ -127,7 +153,10 @@ pipeline {
                 """
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 8. GENERATE SBOM
+        // ─────────────────────────────────────────────
         stage('Generate SBOM') {
             steps {
                 echo 'Generating SBOM with Syft...'
@@ -143,7 +172,10 @@ pipeline {
                 archiveArtifacts artifacts: 'sbom-*.json', fingerprint: true
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 9. CONTAINER IMAGE SCAN - TRIVY
+        // ─────────────────────────────────────────────
         stage('Container Image Scan') {
             steps {
                 echo 'Scanning container image with Trivy...'
@@ -154,12 +186,6 @@ pipeline {
                             --format json \
                             --output trivy-report.json \
                             ${ECR_REPO}:${IMAGE_TAG}
-                        
-                        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                            aquasec/trivy:latest image \
-                            --severity HIGH,CRITICAL \
-                            --exit-code 1 \
-                            ${ECR_REPO}:${IMAGE_TAG} || TRIVY_EXIT=\$?
                     """
                     
                     def trivyReport = readJSON file: 'trivy-report.json'
@@ -173,6 +199,8 @@ pipeline {
                         }
                     }
                     
+                    echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
+                    
                     if (criticalCount > 0 || highCount > 0) {
                         env.QUALITY_GATE_FAILED = 'true'
                         error("❌ CRITICAL: Found ${criticalCount} Critical and ${highCount} High vulnerabilities")
@@ -181,7 +209,10 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 10. QUALITY GATE CHECK
+        // ─────────────────────────────────────────────
         stage('Quality Gate Check') {
             steps {
                 script {
@@ -192,7 +223,10 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 11. PUSH TO ECR
+        // ─────────────────────────────────────────────
         stage('Push to ECR') {
             steps {
                 echo 'Pushing image to Amazon ECR...'
@@ -210,7 +244,10 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 12. UPDATE ECS TASK DEFINITION
+        // ─────────────────────────────────────────────
         stage('Update ECS Task Definition') {
             steps {
                 echo 'Registering new ECS task definition...'
@@ -225,31 +262,36 @@ pipeline {
                                 '.containerDefinitions[0].image = \$IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
                                 current-task-def.json > new-task-def.json
                             
-                            NEW_REVISION=\$(aws ecs register-task-definition \
+                            aws ecs register-task-definition \
                                 --cli-input-json file://new-task-def.json \
                                 --query 'taskDefinition.revision' \
-                                --output text)
+                                --output text > task-revision.txt
                             
-                            echo "Registered new task definition revision: \$NEW_REVISION"
-                            echo "NEW_REVISION=\$NEW_REVISION" >> task-revision.env
+                            echo "Registered new task definition revision: \$(cat task-revision.txt)"
                         """
                     }
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 13. DEPLOY TO ECS
+        // ─────────────────────────────────────────────
         stage('Deploy to ECS') {
             steps {
                 echo 'Updating ECS service with new task definition...'
                 withAWS(credentials: 'aws-credentials', region: env.AWS_REGION) {
                     script {
+                        def taskRevision = sh(
+                            script: 'cat task-revision.txt',
+                            returnStdout: true
+                        ).trim()
+                        
                         sh """
-                            source task-revision.env
-                            
                             aws ecs update-service \
                                 --cluster ${ECS_CLUSTER} \
                                 --service ${ECS_SERVICE} \
-                                --task-definition ${ECS_TASK_FAMILY}:\$NEW_REVISION \
+                                --task-definition ${ECS_TASK_FAMILY}:${taskRevision} \
                                 --force-new-deployment
                             
                             echo "Waiting for deployment to complete..."
@@ -263,14 +305,16 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 14. VERIFY DEPLOYMENT
+        // ─────────────────────────────────────────────
         stage('Verify Deployment') {
             steps {
                 echo 'Verifying deployment health...'
                 withAWS(credentials: 'aws-credentials', region: env.AWS_REGION) {
                     script {
                         sh """
-                            # Get service status
                             SERVICE_STATUS=\$(aws ecs describe-services \
                                 --cluster ${ECS_CLUSTER} \
                                 --services ${ECS_SERVICE} \
@@ -303,14 +347,16 @@ pipeline {
                 }
             }
         }
-        
+
+        // ─────────────────────────────────────────────
+        // 15. CLEANUP OLD ECR IMAGES
+        // ─────────────────────────────────────────────
         stage('Cleanup Old Images') {
             steps {
                 echo 'Cleaning up old ECR images...'
                 withAWS(credentials: 'aws-credentials', region: env.AWS_REGION) {
                     script {
                         sh """
-                            # Keep only last 10 images
                             OLD_IMAGES=\$(aws ecr list-images \
                                 --repository-name ${ECR_REPO} \
                                 --filter tagStatus=TAGGED \
@@ -332,16 +378,19 @@ pipeline {
             }
         }
     }
-    
+
+    // ─────────────────────────────────────────────
+    // POST ACTIONS
+    // ─────────────────────────────────────────────
     post {
         always {
             echo 'Archiving security reports and artifacts...'
-            archiveArtifacts artifacts: '**/*-report.json, **/*-report.xml, sbom-*.json', 
-                            fingerprint: true, 
+            archiveArtifacts artifacts: '**/*-report.json, sbom-*.json',
+                            fingerprint: true,
                             allowEmptyArchive: true
             
             publishHTML([
-                allowMissing: false,
+                allowMissing: true,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
                 reportDir: '.',
@@ -349,8 +398,14 @@ pipeline {
                 reportName: 'Trivy Security Report'
             ])
             
-            // Clean up workspace
-            sh 'docker system prune -f || true'
+            sh """
+                docker rmi ${ECR_REPO}:${IMAGE_TAG} || true
+                docker rmi ${ECR_REPO}:latest || true
+                docker rmi ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} || true
+                docker rmi ${ECR_REGISTRY}/${ECR_REPO}:latest || true
+                docker system prune -f || true
+            """
+            
             cleanWs()
         }
         
@@ -358,17 +413,22 @@ pipeline {
             echo '🎉 Pipeline completed successfully!'
             script {
                 def message = """
-                ✅ **Deployment Successful**
+                ✅ Deployment Successful
                 
-                **Build:** ${BUILD_NUMBER}
-                **Image:** ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-                **ECS Service:** ${ECS_SERVICE}
-                **Security Scans:** All passed
+                Build:       #${BUILD_NUMBER}
+                Image:       ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
+                ECS Cluster: ${ECS_CLUSTER}
+                ECS Service: ${ECS_SERVICE}
                 
-                **Artifacts Generated:**
-                - SBOM (CycloneDX & SPDX)
-                - Security scan reports
-                - Container vulnerability report
+                Security Scans Passed:
+                  - Gitleaks (Secret Scanning)
+                  - SonarQube (SAST)
+                  - npm audit + Snyk (SCA)
+                  - Trivy (Container Scan)
+                
+                Artifacts:
+                  - SBOM (CycloneDX & SPDX)
+                  - Security scan reports
                 """
                 echo message
             }
@@ -378,101 +438,11 @@ pipeline {
             echo '❌ Pipeline failed!'
             script {
                 if (env.QUALITY_GATE_FAILED == 'true') {
-                    echo '🚫 **SECURITY GATE FAILURE** - Deployment blocked due to security findings'
+                    echo '🚫 SECURITY GATE FAILURE - Deployment blocked due to security findings'
                 } else {
-                    echo '💥 **BUILD FAILURE** - Check logs for technical issues'
+                    echo '💥 BUILD FAILURE - Check logs for technical issues'
                 }
             }
-        }
-    }
-}tributes, .compatibilities, .registeredAt, .registeredBy)' \
-                                current-task-def.json > new-task-def.json
-                            
-                            aws ecs register-task-definition \
-                                --cli-input-json file://new-task-def.json \
-                                --query 'taskDefinition.revision' \
-                                --output text > task-revision.txt
-                            
-                            echo "New task definition revision: \$(cat task-revision.txt)"
-                        """
-                    }
-                }
-            }
-        }
-        
-        stage('Deploy to ECS') {
-            steps {
-                echo 'Updating ECS service...'
-                withAWS(credentials: 'aws-credentials', region: env.AWS_REGION) {
-                    script {
-                        sh """
-                            TASK_REVISION=\$(cat task-revision.txt)
-                            
-                            aws ecs update-service \
-                                --cluster ${ECS_CLUSTER} \
-                                --service ${ECS_SERVICE} \
-                                --task-definition ${ECS_TASK_FAMILY}:\${TASK_REVISION} \
-                                --force-new-deployment
-                            
-                            echo "Waiting for service to stabilize..."
-                            aws ecs wait services-stable \
-                                --cluster ${ECS_CLUSTER} \
-                                --services ${ECS_SERVICE}
-                        """
-                        echo '✅ ECS service updated successfully'
-                    }
-                }
-            }
-        }
-        
-        stage('Verify Deployment') {
-            steps {
-                echo 'Verifying deployment health...'
-                withAWS(credentials: 'aws-credentials', region: env.AWS_REGION) {
-                    script {
-                        sh """
-                            RUNNING_COUNT=\$(aws ecs describe-services \
-                                --cluster ${ECS_CLUSTER} \
-                                --services ${ECS_SERVICE} \
-                                --query 'services[0].runningCount' \
-                                --output text)
-                            
-                            echo "Running tasks: \${RUNNING_COUNT}"
-                            
-                            if [ "\${RUNNING_COUNT}" -lt "1" ]; then
-                                echo "❌ No running tasks found"
-                                exit 1
-                            fi
-                            
-                            TASK_ARN=\$(aws ecs list-tasks \
-                                --cluster ${ECS_CLUSTER} \
-                                --service-name ${ECS_SERVICE} \
-                                --query 'taskArns[0]' \
-                                --output text)
-                            
-                            echo "✅ Deployment verified - Task: \${TASK_ARN}"
-                        """
-                    }
-                }
-            }
-        }
-    }
-    
-    post {
-        always {
-            archiveArtifacts artifacts: '*-report.json', allowEmptyArchive: true, fingerprint: true
-            sh """
-                docker rmi ${ECR_REPO}:${IMAGE_TAG} || true
-                docker rmi ${ECR_REPO}:latest || true
-                docker rmi ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} || true
-                docker rmi ${ECR_REGISTRY}/${ECR_REPO}:latest || true
-            """
-        }
-        success {
-            echo '✅ Pipeline completed successfully! Application deployed to ECS.'
-        }
-        failure {
-            echo '❌ Pipeline failed! Check security reports and logs.'
         }
     }
 }
