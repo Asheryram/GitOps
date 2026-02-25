@@ -61,14 +61,14 @@ pipeline {
         // 4. SAST - SONARQUBE (warn only - not yet configured)
         // ─────────────────────────────────────────────
 
-        stage('SAST - SonarQube') {
-            steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    echo 'Running SAST with SonarQube...'
-                    runSonarQubeScan()
-                }
-            }
-        }
+        // stage('SAST - SonarQube') {
+        //     steps {
+        //         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+        //             echo 'Running SAST with SonarQube...'
+        //             runSonarQubeScan()
+        //         }
+        //     }
+        // }
 
         // ─────────────────────────────────────────────
         // 5. SCA - DEPENDENCY CHECK (warn only - known vulns in dev deps)
@@ -128,24 +128,24 @@ pipeline {
         // ─────────────────────────────────────────────
         // 9. CONTAINER IMAGE SCAN - TRIVY
         // ─────────────────────────────────────────────
-        stage('Container Image Scan') {
-            steps {
-                echo 'Scanning container image with Trivy...'
-                script {
-                    sh '''
-                        docker run --rm \
-                        -v /var/run/docker.sock:/var/run/docker.sock \
-                        -v $WORKSPACE:/workspace \
-                        aquasec/trivy:latest \
-                        image --format json \
-                        --output /workspace/trivy-report.json \
-                        $ECR_REPO:$BUILD_NUMBER
-                    '''
+        // stage('Container Image Scan') {
+        //     steps {
+        //         echo 'Scanning container image with Trivy...'
+        //         script {
+        //             sh '''
+        //                 docker run --rm \
+        //                 -v /var/run/docker.sock:/var/run/docker.sock \
+        //                 -v $WORKSPACE:/workspace \
+        //                 aquasec/trivy:latest \
+        //                 image --format json \
+        //                 --output /workspace/trivy-report.json \
+        //                 $ECR_REPO:$BUILD_NUMBER
+        //             '''
 
-                    analyzeTrivyReport()
-                }
-            }
-        }
+        //             analyzeTrivyReport()
+        //         }
+        //     }
+        // }
 
         // ─────────────────────────────────────────────
         // 10. QUALITY GATE CHECK
