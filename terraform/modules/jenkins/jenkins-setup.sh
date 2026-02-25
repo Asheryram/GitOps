@@ -75,6 +75,17 @@ for i in $(seq 1 30); do
   sleep 10
 done
 
+# Prepare sonarqube installation inside jenkins container
+docker exec -it -u root jenkins bash
+apt-get update
+apt-get install -y wget unzip
+
+wget https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-5.0.1.3006-linux.zip && \
+unzip sonar-scanner-cli-5.0.1.3006-linux.zip -d /opt/ && \
+ln -s /opt/sonar-scanner-5.0.1.3006-linux/bin/sonar-scanner /usr/local/bin/sonar-scanner && \
+chmod -R 755 /opt/sonar-scanner-5.0.1.3006-linux && \
+sonar-scanner --version
+
 # Print initial admin password
 echo "Waiting for initial admin password to be generated..."
 sleep 30
