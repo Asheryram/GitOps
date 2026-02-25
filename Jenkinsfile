@@ -9,11 +9,11 @@ pipeline {
         AWS_ACCOUNT_ID = credentials('aws-account-id')
         AWS_REGION = 'eu-central-1'
         ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        ECR_REPO = 'cicd-node-app'
         IMAGE_TAG = "${BUILD_NUMBER}"
-        ECS_CLUSTER = 'cicd-cluster'
-        ECS_SERVICE = 'cicd-service'
-        ECS_TASK_FAMILY = 'cicd-task'
+        ECR_REPO = 'jenkins-cicd-pipeline-app'
+        ECS_CLUSTER = 'jenkins-cicd-pipeline-cluster'
+        ECS_SERVICE = 'jenkins-cicd-pipeline-service'
+        ECS_TASK_FAMILY = 'jenkins-cicd-pipeline-task'
         QUALITY_GATE_FAILED = 'false'
     }
     
