@@ -42,15 +42,7 @@ pipeline {
                             --no-git || true
                     '''
 
-                    if (fileExists('gitleaks-report.json')) {
-                        def report = readJSON file: 'gitleaks-report.json'
-                        if (report && report.size() > 0) {
-                            echo "WARNING: ${report.size()} secret(s) detected - review gitleaks-report.json"
-                            unstable('Secret scanning found potential secrets - pipeline continues but marked unstable')
-                        } else {
-                            echo 'No secrets detected'
-                        }
-                    }
+                    checkGitleaksReport()
                 }
             }
         }
@@ -69,68 +61,24 @@ pipeline {
         // 4. SAST - SONARQUBE (warn only - not yet configured)
         // ─────────────────────────────────────────────
 
-        // stage('SAST - SonarQube') {
-        //     steps {
-        //         catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-        //             echo 'Running SAST with SonarQube...'
-        //             script {
-        //                 withSonarQubeEnv('SonarQube') {
-        //                     sh '''
-        //                         sonar-scanner \
-        //                             -Dsonar.projectKey=cicd-node-app \
-        //                             -Dsonar.organization=asheryram \
-        //                             -Dsonar.sources=. \
-        //                             -Dsonar.exclusions=node_modules/**,test/**
-        //                     '''
-        //                 }
-        //                 timeout(time: 5, unit: 'MINUTES') {
-        //                     def qg = waitForQualityGate()
-        //                     if (qg.status != 'OK') {
-        //                         env.QUALITY_GATE_FAILED = 'true'
-        //                         error("CRITICAL: SonarQube quality gate failed: ${qg.status}")
-        //                     }
-        //                 }
-        //                 echo 'SAST passed'
-        //             }
-        //         }
-        //     }
-        // }
+        stage('SAST - SonarQube') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    echo 'Running SAST with SonarQube...'
+                    runSonarQubeScan()
+                }
+            }
+        }
 
         // ─────────────────────────────────────────────
         // 5. SCA - DEPENDENCY CHECK (warn only - known vulns in dev deps)
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                catchError(getUnstableConfig()) {
                     echo 'Running SCA with npm audit and Snyk...'
-                    script {
-                        sh '''
-                            npm audit --json > npm-audit-report.json || true
-
-                            AUDIT_EXIT=0
-                            npm audit --audit-level=high || AUDIT_EXIT=$?
-
-                            if [ "$AUDIT_EXIT" != "0" ]; then
-                                echo "WARNING: High/Critical vulnerabilities found in dependencies"
-                                exit 1
-                            fi
-                        '''
-
-                        withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-                            sh '''
-                                npx snyk test --json > snyk-report.json || true
-
-                                SNYK_EXIT=0
-                                npx snyk test --severity-threshold=high || SNYK_EXIT=$?
-
-                                if [ "$SNYK_EXIT" != "0" ]; then
-                                    echo "WARNING: High/Critical vulnerabilities found by Snyk"
-                                    exit 1
-                                fi
-                            '''
-                        }
-                        echo 'SCA passed'
-                    }
+                    runNpmAudit()
+                    runSnykScan()
                 }
             }
         }
@@ -194,25 +142,7 @@ pipeline {
                         $ECR_REPO:$BUILD_NUMBER
                     '''
 
-                    def trivyReport = readJSON file: 'trivy-report.json'
-                    def criticalCount = 0
-                    def highCount = 0
-
-                    trivyReport.Results?.each { result ->
-                        result.Vulnerabilities?.each { vuln ->
-                            if (vuln.Severity == 'CRITICAL') criticalCount++
-                            if (vuln.Severity == 'HIGH') highCount++
-                        }
-                    }
-
-                    echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
-
-                    if (criticalCount > 0 || highCount > 0) {
-                        env.QUALITY_GATE_FAILED = 'true'
-                        // error("CRITICAL: Found ${criticalCount} Critical and ${highCount} High vulnerabilities")
-                        echo "WARNING: Found ${criticalCount} Critical and ${highCount} High vulnerabilities"
-                    }
-                    echo 'Container scan passed'
+                    analyzeTrivyReport()
                 }
             }
         }
@@ -237,17 +167,8 @@ pipeline {
         stage('Push to ECR') {
             steps {
                 echo 'Pushing image to Amazon ECR...'
-                withAWS(credentials: 'aws-credentials', region: 'eu-central-1') {
-                    sh '''
-                        aws ecr get-login-password --region $AWS_REGION | \
-                            docker login --username AWS --password-stdin $ECR_REGISTRY
-
-                        docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-                        docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
-
-                        docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-                        docker push $ECR_REGISTRY/$ECR_REPO:latest
-                    '''
+                script {
+                    pushToECR()
                 }
             }
         }
@@ -258,25 +179,8 @@ pipeline {
         stage('Update ECS Task Definition') {
             steps {
                 echo 'Registering new ECS task definition...'
-                withAWS(credentials: 'aws-credentials', region: 'eu-central-1') {
-                    script {
-                        sh '''
-                            aws ecs describe-task-definition \
-                                --task-definition $ECS_TASK_FAMILY \
-                                --query 'taskDefinition' > current-task-def.json
-
-                            jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER" \
-                                '.containerDefinitions[0].image = $IMAGE | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
-                                current-task-def.json > new-task-def.json
-
-                            aws ecs register-task-definition \
-                                --cli-input-json file://new-task-def.json \
-                                --query 'taskDefinition.revision' \
-                                --output text > task-revision.txt
-
-                            echo "Registered new task definition revision: $(cat task-revision.txt)"
-                        '''
-                    }
+                script {
+                    updateECSTaskDefinition()
                 }
             }
         }
@@ -287,28 +191,8 @@ pipeline {
         stage('Deploy to ECS') {
             steps {
                 echo 'Updating ECS service with new task definition...'
-                withAWS(credentials: 'aws-credentials', region: 'eu-central-1') {
-                    script {
-                        def taskRevision = sh(
-                            script: 'cat task-revision.txt',
-                            returnStdout: true
-                        ).trim()
-
-                        sh """
-                            aws ecs update-service \
-                                --cluster ${ECS_CLUSTER} \
-                                --service ${ECS_SERVICE} \
-                                --task-definition ${ECS_TASK_FAMILY}:${taskRevision} \
-                                --force-new-deployment
-
-                            echo "Waiting for deployment to complete..."
-                            aws ecs wait services-stable \
-                                --cluster ${ECS_CLUSTER} \
-                                --services ${ECS_SERVICE}
-
-                            echo "ECS service updated successfully"
-                        """
-                    }
+                script {
+                    deployToECS()
                 }
             }
         }
@@ -319,36 +203,8 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 echo 'Verifying deployment health...'
-                withAWS(credentials: 'aws-credentials', region: 'eu-central-1') {
-                    sh '''
-                        SERVICE_STATUS=$(aws ecs describe-services \
-                            --cluster $ECS_CLUSTER \
-                            --services $ECS_SERVICE \
-                            --query 'services[0].status' \
-                            --output text)
-
-                        RUNNING_COUNT=$(aws ecs describe-services \
-                            --cluster $ECS_CLUSTER \
-                            --services $ECS_SERVICE \
-                            --query 'services[0].runningCount' \
-                            --output text)
-
-                        DESIRED_COUNT=$(aws ecs describe-services \
-                            --cluster $ECS_CLUSTER \
-                            --services $ECS_SERVICE \
-                            --query 'services[0].desiredCount' \
-                            --output text)
-
-                        echo "Service Status: $SERVICE_STATUS"
-                        echo "Running Tasks: $RUNNING_COUNT/$DESIRED_COUNT"
-
-                        if [ "$SERVICE_STATUS" = "ACTIVE" ] && [ "$RUNNING_COUNT" = "$DESIRED_COUNT" ]; then
-                            echo "Deployment verification successful"
-                        else
-                            echo "Deployment verification failed"
-                            exit 1
-                        fi
-                    '''
+                script {
+                    verifyDeployment()
                 }
             }
         }
@@ -359,24 +215,8 @@ pipeline {
         stage('Cleanup Old Images') {
             steps {
                 echo 'Cleaning up old ECR images...'
-                withAWS(credentials: 'aws-credentials', region: 'eu-central-1') {
-                    sh '''
-                        OLD_IMAGES=$(aws ecr list-images \
-                            --repository-name $ECR_REPO \
-                            --filter tagStatus=TAGGED \
-                            --query 'imageIds[10:]' \
-                            --output json)
-
-                        if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
-                            echo "Deleting old images..."
-                            aws ecr batch-delete-image \
-                                --repository-name $ECR_REPO \
-                                --image-ids "$OLD_IMAGES"
-                            echo "Old images cleaned up"
-                        else
-                            echo "No old images to clean up"
-                        fi
-                    '''
+                script {
+                    cleanupOldImages()
                 }
             }
         }
@@ -440,12 +280,221 @@ pipeline {
         failure {
             echo 'Pipeline failed!'
             script {
-                if (env.QUALITY_GATE_FAILED == 'true') {
-                    echo 'SECURITY GATE FAILURE - Deployment blocked due to security findings'
-                } else {
-                    echo 'BUILD FAILURE - Check logs for technical issues'
-                }
+                def failureReason = (env.QUALITY_GATE_FAILED == 'true') ? 
+                    'SECURITY GATE FAILURE - Deployment blocked due to security findings' : 
+                    'BUILD FAILURE - Check logs for technical issues'
+                echo failureReason
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────────────
+def checkGitleaksReport() {
+    if (fileExists('gitleaks-report.json')) {
+        def report = readJSON file: 'gitleaks-report.json'
+        if (report && report.size() > 0) {
+            echo "WARNING: ${report.size()} secret(s) detected - review gitleaks-report.json"
+            unstable('Secret scanning found potential secrets - pipeline continues but marked unstable')
+        } else {
+            echo 'No secrets detected'
+        }
+    }
+}
+
+def runNpmAudit() {
+    sh '''
+        npm audit --json > npm-audit-report.json || true
+        AUDIT_EXIT=0
+        npm audit --audit-level=high || AUDIT_EXIT=$?
+        if [ "$AUDIT_EXIT" != "0" ]; then
+            echo "WARNING: High/Critical vulnerabilities found in dependencies"
+            exit 1
+        fi
+    '''
+}
+
+def runSnykScan() {
+    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+        sh '''
+            npx snyk test --json > snyk-report.json || true
+            SNYK_EXIT=0
+            npx snyk test --severity-threshold=high || SNYK_EXIT=$?
+            if [ "$SNYK_EXIT" != "0" ]; then
+                echo "WARNING: High/Critical vulnerabilities found by Snyk"
+                exit 1
+            fi
+        '''
+    }
+    echo 'SCA passed'
+}
+
+def analyzeTrivyReport() {
+    def trivyReport = readJSON file: 'trivy-report.json'
+    def criticalCount = 0
+    def highCount = 0
+
+    trivyReport.Results?.each { result ->
+        result.Vulnerabilities?.each { vuln ->
+            if (vuln.Severity == 'CRITICAL') {
+                criticalCount++
+            }
+            if (vuln.Severity == 'HIGH') {
+                highCount++
+            }
+        }
+    }
+
+    echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
+
+    if (criticalCount > 0 || highCount > 0) {
+        env.QUALITY_GATE_FAILED = 'true'
+        echo "WARNING: Found ${criticalCount} Critical and ${highCount} High vulnerabilities"
+    }
+    echo 'Container scan passed'
+}
+
+def getAWSConfig() {
+    return [credentials: 'aws-credentials', region: 'eu-central-1']
+}
+
+def pushToECR() {
+    withAWS(credentials: 'aws-credentials') {
+        sh '''
+            aws ecr get-login-password --region $AWS_REGION | \
+                docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+            docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
+
+            docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+            docker push $ECR_REGISTRY/$ECR_REPO:latest
+        '''
+    }
+}
+
+def updateECSTaskDefinition() {
+    withAWS(getAWSConfig()) {
+        sh '''
+            aws ecs describe-task-definition \
+                --task-definition $ECS_TASK_FAMILY \
+                --query 'taskDefinition' > current-task-def.json
+
+            jq --arg IMAGE "$ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER" \
+                '.containerDefinitions[0].image = $IMAGE | 
+                del(.taskDefinitionArn, .revision, .status, .requiresAttributes, 
+                .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
+                current-task-def.json > new-task-def.json
+
+            aws ecs register-task-definition \
+                --cli-input-json file://new-task-def.json \
+                --query 'taskDefinition.revision' \
+                --output text > task-revision.txt
+
+            echo "Registered new task definition revision: $(cat task-revision.txt)"
+        '''
+    }
+}
+
+def deployToECS() {
+    withAWS(getAWSConfig()) {
+        def taskRevision = sh(script: 'cat task-revision.txt', returnStdout: true).trim()
+
+        sh """
+            aws ecs update-service \
+                --cluster ${ECS_CLUSTER} \
+                --service ${ECS_SERVICE} \
+                --task-definition ${ECS_TASK_FAMILY}:${taskRevision} \
+                --force-new-deployment
+
+            echo "Waiting for deployment to complete..."
+            aws ecs wait services-stable \
+                --cluster ${ECS_CLUSTER} \
+                --services ${ECS_SERVICE}
+
+            echo "ECS service updated successfully"
+        """
+    }
+}
+
+def verifyDeployment() {
+    withAWS(getAWSConfig()) {
+        sh '''
+            SERVICE_STATUS=$(aws ecs describe-services \
+                --cluster $ECS_CLUSTER \
+                --services $ECS_SERVICE \
+                --query 'services[0].status' \
+                --output text)
+
+            RUNNING_COUNT=$(aws ecs describe-services \
+                --cluster $ECS_CLUSTER \
+                --services $ECS_SERVICE \
+                --query 'services[0].runningCount' \
+                --output text)
+
+            DESIRED_COUNT=$(aws ecs describe-services \
+                --cluster $ECS_CLUSTER \
+                --services $ECS_SERVICE \
+                --query 'services[0].desiredCount' \
+                --output text)
+
+            echo "Service Status: $SERVICE_STATUS"
+            echo "Running Tasks: $RUNNING_COUNT/$DESIRED_COUNT"
+
+            if [ "$SERVICE_STATUS" = "ACTIVE" ] && [ "$RUNNING_COUNT" = "$DESIRED_COUNT" ]; then
+                echo "Deployment verification successful"
+            else
+                echo "Deployment verification failed"
+                exit 1
+            fi
+        '''
+    }
+}
+
+def cleanupOldImages() {
+    withAWS(getAWSConfig()) {
+        sh '''
+            OLD_IMAGES=$(aws ecr list-images \
+                --repository-name $ECR_REPO \
+                --filter tagStatus=TAGGED \
+                --query 'imageIds[10:]' \
+                --output json)
+
+            if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
+                echo "Deleting old images..."
+                aws ecr batch-delete-image \
+                    --repository-name $ECR_REPO \
+                    --image-ids "$OLD_IMAGES" || true
+                echo "Old images cleaned up"
+            else
+                echo "No old images to clean up"
+            fi
+        '''
+    }
+}
+
+def getUnstableConfig() {
+    return [buildResult: 'UNSTABLE', stageResult: 'UNSTABLE']
+}
+
+def runSonarQubeScan() {
+    withSonarQubeEnv('SonarQube') {
+        sh '''
+            sonar-scanner \
+                -Dsonar.projectKey=cicd-node-app \
+                -Dsonar.organization=asheryram \
+                -Dsonar.sources=. \
+                -Dsonar.exclusions=node_modules/**,test/**
+        '''
+    }
+    timeout(time: 5, unit: 'MINUTES') {
+        def qg = waitForQualityGate()
+        if (qg.status != 'OK') {
+            env.QUALITY_GATE_FAILED = 'true'
+            error("CRITICAL: SonarQube quality gate failed: ${qg.status}")
+        }
+    }
+    echo 'SAST passed'
 }
