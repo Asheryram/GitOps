@@ -360,19 +360,35 @@ def getAWSConfig() {
     return [credentials: 'aws-credentials', region: 'eu-central-1']
 }
 
+// def pushToECR() {
+//     withAWS(credentials: 'aws-credentials') {
+//         sh '''
+//             aws ecr get-login-password --region $AWS_REGION | \
+//                 docker login --username AWS --password-stdin $ECR_REGISTRY
+
+//             docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+//             docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
+
+//             docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+//             docker push $ECR_REGISTRY/$ECR_REPO:latest
+//         '''
+//     }
+// }
+
 def pushToECR() {
-    withAWS(credentials: 'aws-credentials') {
-        sh '''
-            aws ecr get-login-password --region $AWS_REGION | \
-                docker login --username AWS --password-stdin $ECR_REGISTRY
+    sh '''
+        echo "Logging in to ECR..."
+        aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-            docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
+        echo "Tagging Docker image..."
+        docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+        docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REGISTRY/$ECR_REPO:latest
 
-            docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
-            docker push $ECR_REGISTRY/$ECR_REPO:latest
-        '''
-    }
+        echo "Pushing Docker image to ECR..."
+        docker push $ECR_REGISTRY/$ECR_REPO:$BUILD_NUMBER
+        docker push $ECR_REGISTRY/$ECR_REPO:latest
+    '''
 }
 
 def updateECSTaskDefinition() {
