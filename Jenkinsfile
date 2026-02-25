@@ -78,6 +78,7 @@ pipeline {
                             sh '''
                                 sonar-scanner \
                                     -Dsonar.projectKey=cicd-node-app \
+                                    -Dsonar.organization=asheryram \
                                     -Dsonar.sources=. \
                                     -Dsonar.exclusions=node_modules/**,test/**
                             '''
