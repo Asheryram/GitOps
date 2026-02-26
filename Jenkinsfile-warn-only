@@ -351,7 +351,7 @@ def runSnykScan() {
         sh 'npx snyk test --json > snyk-report.json || true'
         def exitCode = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
         if (exitCode != 0) {
-            echo '⚠️  WARNING: High/Critical vulnerabilities found by Snyk — deployment continues'
+            echo '  WARNING: High/Critical vulnerabilities found by Snyk — deployment continues'
             unstable('Snyk found High/Critical vulnerabilities')
         } else {
             echo ' Snyk scan passed'
