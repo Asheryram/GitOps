@@ -823,6 +823,129 @@ terraform force-unlock LOCK_ID
 
 ---
 
+## GitOps Pipeline
+
+### Overview
+
+The GitOps pipeline automates the entire CI/CD workflow from code commit to production deployment. The pipeline integrates Jenkins, Docker, ECR, and ECS to provide a complete DevOps solution.
+
+### Pipeline Architecture
+
+![GitOps Success Pipeline](screenshots/GitOps/GitopsSuccessPipeline.png)
+
+### Pipeline Stages
+
+#### 1. **Source Control Integration**
+- GitHub webhook triggers Jenkins on code push
+- Automatic branch detection and checkout
+- Git credentials managed securely
+
+#### 2. **Build & Test**
+- Node.js application build
+- Unit test execution with Jest
+- Code quality checks
+- Security scanning with Trivy
+
+#### 3. **Docker Image Creation**
+- Multi-stage Dockerfile build
+- Image optimization and security hardening
+- Vulnerability scanning
+
+#### 4. **Container Registry**
+- Push to AWS ECR
+- Image tagging with build number
+- Lifecycle policy management
+
+#### 5. **Deployment Options**
+
+**EC2 Deployment**:
+- Direct deployment to EC2 instances
+- Blue-green deployment support
+- Health checks and rollback
+
+**ECS Deployment**:
+- Fargate container orchestration
+- Service discovery and load balancing
+- Auto-scaling capabilities
+
+### Pipeline Configuration
+
+#### Jenkinsfile Structure
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        ECR_REPOSITORY = "${PROJECT_NAME}-app"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'npm install'
+                sh 'npm test'
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    docker.build("${ECR_REPOSITORY}:${IMAGE_TAG}")
+                }
+            }
+        }
+        
+        stage('Push to ECR') {
+            steps {
+                script {
+                    docker.withRegistry("https://${ECR_REGISTRY}", "ecr:${AWS_REGION}:aws-credentials") {
+                        docker.image("${ECR_REPOSITORY}:${IMAGE_TAG}").push()
+                        docker.image("${ECR_REPOSITORY}:${IMAGE_TAG}").push("latest")
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to ECS') {
+            steps {
+                sh './deploy-ecs.sh'
+            }
+        }
+    }
+}
+```
+
+### Success Metrics
+
+- **Build Time**: < 5 minutes average
+- **Deployment Time**: < 2 minutes
+- **Success Rate**: > 95%
+- **Rollback Time**: < 1 minute
+
+### Monitoring & Alerts
+
+- CloudWatch integration for logs and metrics
+- Jenkins build notifications
+- Slack/email alerts on failures
+- Application health monitoring
+
+### Security Features
+
+- Container image vulnerability scanning
+- Secrets management with AWS Secrets Manager
+- Network isolation with VPC
+- IAM role-based access control
+
+---
+
 **Last Updated**: 2024
 **Terraform Version**: >= 1.0
 **AWS Provider Version**: ~> 5.0
