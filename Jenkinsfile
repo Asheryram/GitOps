@@ -35,12 +35,19 @@ pipeline {
             steps {
                 script {
                     def params = sh(
-                        script: "aws ssm get-parameters-by-path --path '/jenkins/cicd/' " +
-                               "--query 'Parameters[*].{Name:Name,Value:Value}' --output json",
+                        script: '''aws ssm get-parameters-by-path --path /jenkins/cicd/ \
+                               --query 'Parameters[*].{Name:Name,Value:Value}' --output json''',
                         returnStdout: true
                     ).trim()
 
+                    echo "Raw SSM response: ${params}"
+                    
                     def parsed = readJSON text: params
+                    
+                    if (!parsed || parsed.size() == 0) {
+                        error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
+                    }
+                    
                     def ssm = parsed.collectEntries { [(it.Name.split('/').last()): it.Value] }
 
                     env.AWS_REGION      = ssm['aws-region']
@@ -52,7 +59,7 @@ pipeline {
                     env.SONAR_ORG       = ssm['sonar-org']
                     env.IMAGES_TO_KEEP  = ssm['images-to-keep']
                     env.ECR_REGISTRY    = sh(
-                        script: "aws sts get-caller-identity --query Account --output text",
+                        script: 'aws sts get-caller-identity --query Account --output text',
                         returnStdout: true
                     ).trim() + ".dkr.ecr.${env.AWS_REGION}.amazonaws.com"
 
