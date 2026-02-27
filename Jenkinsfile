@@ -510,21 +510,21 @@ def verifyDeployment() {
 }
 
 def cleanupOldImages() {
-    sh '''
-        OLD_IMAGES=$(aws ecr list-images \
-            --repository-name $ECR_REPO \
+    sh """
+        OLD_IMAGES=\$(aws ecr list-images \
+            --repository-name \$ECR_REPO \
             --filter tagStatus=TAGGED \
-            --query 'imageIds[${IMAGES_TO_KEEP}:]' \
+            --query "imageIds[${env.IMAGES_TO_KEEP}:]" \
             --output json)
 
-        if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
-            echo "Deleting old images (keeping ${IMAGES_TO_KEEP} most recent)..."
+        if [ "\$OLD_IMAGES" != "[]" ] && [ "\$OLD_IMAGES" != "null" ]; then
+            echo "Deleting old images (keeping ${env.IMAGES_TO_KEEP} most recent)..."
             aws ecr batch-delete-image \
-                --repository-name $ECR_REPO \
-                --image-ids "$OLD_IMAGES" || true
+                --repository-name \$ECR_REPO \
+                --image-ids "\$OLD_IMAGES" || true
             echo "Old images cleaned up"
         else
             echo "No old images to clean up"
         fi
-    '''
+    """
 }
