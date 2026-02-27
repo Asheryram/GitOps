@@ -59,7 +59,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Configure Environment'
                         env.FAILURE_REASON  = 'No SSM parameters found at /jenkins/cicd/ — run terraform apply'
                         env.FAILURE_SUMMARY = '• Check SSM Parameter Store in AWS console\n• Verify IAM role has ssm:GetParametersByPath permission\n• Run terraform apply to create missing parameters'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
 
                     def ssm = parsed.collectEntries {
@@ -109,7 +109,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Checkout'
                         env.FAILURE_REASON  = "Failed to checkout source code: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check SCM configuration and credentials in Jenkins\n• Verify repository URL and branch name are correct'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -159,7 +159,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Install Dependencies'
                         env.FAILURE_REASON  = "npm ci failed — check package.json or network: ${err.message}"
                         env.FAILURE_SUMMARY = '• Verify package.json and package-lock.json are valid and committed\n• Check network connectivity to npm registry\n• Try running npm ci locally to reproduce'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -228,7 +228,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Unit Tests'
                         env.FAILURE_REASON  = "Unit tests failed: ${err.message}"
                         env.FAILURE_SUMMARY = '• Review test output in console logs\n• Fix failing tests before retrying\n• Run npm test locally to reproduce'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -251,7 +251,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Build Docker Image'
                         env.FAILURE_REASON  = "Docker build failed: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check Dockerfile syntax\n• Verify Docker daemon is running on agent\n• Check base image is accessible from agent'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -280,7 +280,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Generate SBOM'
                         env.FAILURE_REASON  = "Syft SBOM generation failed: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check Docker socket access on agent\n• Verify Syft image is accessible'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -342,7 +342,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Push to ECR'
                         env.FAILURE_REASON  = "Failed to push image to ECR: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check IAM role has ecr:PutImage and ecr:GetAuthorizationToken permissions\n• Verify ECR repository exists in the correct region\n• Check Docker login to ECR succeeded'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -362,7 +362,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Update ECS Task Definition'
                         env.FAILURE_REASON  = "Failed to register ECS task definition: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check IAM role has ecs:RegisterTaskDefinition permission\n• Verify task family name matches existing definition\n• Check jq is installed on the agent'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -382,7 +382,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Deploy to ECS'
                         env.FAILURE_REASON  = "ECS deployment failed or service did not stabilize: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check ECS service events in AWS console\n• Verify task has enough CPU/memory resources\n• Check container health check configuration\n• Review CloudWatch logs for container startup errors'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -402,7 +402,7 @@ pipeline {
                         env.FAILURE_STAGE   = 'Verify Deployment'
                         env.FAILURE_REASON  = "Deployment verification failed — running count does not match desired: ${err.message}"
                         env.FAILURE_SUMMARY = '• Check ECS task stopped reason in AWS console\n• Review application logs in CloudWatch\n• Verify security group and VPC configuration\n• Check target group health in load balancer'
-                        throw new Exception(env.FAILURE_REASON)
+                        error("[PIPELINE] ${env.FAILURE_REASON}")
                     }
                 }
             }
@@ -614,7 +614,7 @@ def checkGitleaksReport() {
             env.FAILURE_REASON  = "${report.size()} secret(s) detected in source code"
             env.VULN_COUNTS     = "🔴 Secrets found: ${report.size()}"
             env.FAILURE_SUMMARY = details + more
-            throw new Exception(env.FAILURE_REASON)
+            error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         } else {
             echo 'No secrets detected'
         }
@@ -641,7 +641,7 @@ def runSonarQubeScan() {
             env.FAILURE_REASON  = "Quality gate status: ERROR — critical code issues must be fixed"
             env.VULN_COUNTS     = "🔴 SonarQube Gate: ERROR"
             env.FAILURE_SUMMARY = "• Quality gate returned ERROR status\n• Fix all Blocker and Critical issues\n• Review full findings at the SonarQube dashboard"
-            throw new Exception(env.FAILURE_REASON)
+            error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         } else if (qg.status != 'OK') {
             env.FAILURE_TYPE    = 'APP_UNSTABLE'
             env.FAILURE_STAGE   = 'SAST - SonarQube'
@@ -675,7 +675,7 @@ def runNpmAudit() {
         env.FAILURE_REASON  = "${criticalList.size()} CRITICAL CVEs found by npm audit"
         env.VULN_COUNTS     = "🔴 Critical: ${criticalList.size()} | 🟠 High: ${vulns.findAll { k, v -> v.severity == 'high' }.size()} | 🟡 Medium: ${vulns.findAll { k, v -> v.severity == 'moderate' }.size()}"
         env.FAILURE_SUMMARY = details + more
-        throw new Exception(env.FAILURE_REASON)
+        error("[APP_CRITICAL] ${env.FAILURE_REASON}")
     }
 
     // Check HIGH CVEs → UNSTABLE
@@ -723,7 +723,7 @@ def runSnykScan() {
             env.FAILURE_REASON  = "${criticalList.size()} CRITICAL CVEs found by Snyk"
             env.VULN_COUNTS     = "🔴 Critical: ${criticalList.size()} | 🟠 High: ${vulns.findAll { it.severity == 'high' }.size()} | 🟡 Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
             env.FAILURE_SUMMARY = details + more
-            throw new Exception(env.FAILURE_REASON)
+            error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         }
 
         // Check HIGH CVEs → UNSTABLE
@@ -787,7 +787,7 @@ def analyzeTrivyReport() {
         env.FAILURE_REASON  = "${criticalCount} CRITICAL CVEs found in container image"
         env.VULN_COUNTS     = "🔴 Critical: ${criticalCount} | 🟠 High: ${highCount} | 🟡 Medium: ${mediumCount} | ⚪ Low: ${lowCount}"
         env.FAILURE_SUMMARY = details + more
-        throw new Exception(env.FAILURE_REASON)
+        error("[APP_CRITICAL] ${env.FAILURE_REASON}")
     } else if (highCount > 0 || mediumCount > 0) {
         def details = highVulns.take(5).join('\n')
         def more    = highCount > 5 ? "\n_...and ${highCount - 5} more. See trivy-report.json_" : ''
