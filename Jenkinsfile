@@ -26,8 +26,6 @@ pipeline {
         IMAGES_TO_KEEP   = ''
     }
 
-    def unstableError = [buildResult: 'UNSTABLE', stageResult: 'UNSTABLE']
-
     stages {
 
         // ─────────────────────────────────────────────
@@ -78,7 +76,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
-                catchError(unstableError) {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Scanning for secrets with Gitleaks...'
                     sh '''
                         docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
@@ -107,7 +105,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('SAST - SonarQube') {
             steps {
-                catchError(unstableError) {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Running SAST with SonarQube...'
                     runSonarQubeScan()
                 }
@@ -119,7 +117,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
-                catchError(unstableError) {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Running SCA with npm audit and Snyk...'
                     runNpmAudit()
                     runSnykScan()
@@ -174,7 +172,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Container Image Scan') {
             steps {
-                catchError(unstableError) {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Scanning container image with Trivy...'
                     sh '''
                         docker run --rm \
