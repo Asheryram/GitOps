@@ -447,6 +447,14 @@ pipeline {
                 docker system prune -f || true
             '''
 
+            // cleanWs() moved to cleanup block — runs AFTER Slack notifications
+            // so env vars (FAILURE_TYPE, FAILURE_REASON etc.) are still available
+        }
+
+        // ─────────────────────────────────────────────
+        // CLEANUP — runs last, after all other post blocks including Slack
+        // ─────────────────────────────────────────────
+        cleanup {
             cleanWs()
         }
 
@@ -882,7 +890,7 @@ def verifyDeployment() {
 
 def cleanupOldImages() {
     def keepCount = env.IMAGES_TO_KEEP ?: '5'
-    sh """
+    sh '''
         OLD_IMAGES=\$(aws ecr list-images \
             --repository-name \$ECR_REPO \
             --filter tagStatus=TAGGED \
@@ -898,5 +906,5 @@ def cleanupOldImages() {
         else
             echo "No old images to clean up"
         fi
-    """
+    '''
 }
