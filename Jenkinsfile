@@ -460,7 +460,7 @@ pipeline {
 
 *Build:*        #${BUILD_NUMBER}
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
-*Commit:*       \`${env.GIT_COMMIT_SHORT ?: 'N/A'}\` by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
+*Commit:*       '${env.GIT_COMMIT_SHORT ?: 'N/A'}' by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
 *Image:*        ${env.ECR_REGISTRY}/${env.ECR_REPO}:${env.IMAGE_TAG}
 *ECS Cluster:*  ${env.ECS_CLUSTER}
 *ECS Service:*  ${env.ECS_SERVICE}
@@ -501,7 +501,7 @@ pipeline {
 
 *Build:*        #${BUILD_NUMBER}
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
-*Commit:*       \`${env.GIT_COMMIT_SHORT ?: 'N/A'}\` by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
+*Commit:*       '${env.GIT_COMMIT_SHORT ?: 'N/A'}' by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
 *Duration:*     ${currentBuild.durationString}
 *Stage:*        ${env.FAILURE_STAGE ?: 'See report'}
 *Issue Type:*   🟡 Application Issue (non-critical)
@@ -560,7 +560,7 @@ Fix before next release.
 
 *Build:*        #${BUILD_NUMBER}
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
-*Commit:*       \`${env.GIT_COMMIT_SHORT ?: 'N/A'}\` by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
+*Commit:*       '${env.GIT_COMMIT_SHORT ?: 'N/A'}' by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
 *Duration:*     ${currentBuild.durationString}
 *Failed Stage:* ${env.FAILURE_STAGE ?: 'Unknown'}
 *Issue Type:*   ${issueLabel}
