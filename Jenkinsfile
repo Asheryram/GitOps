@@ -1,6 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// VERSION 2: FAIL-FAST
-// Any security scan failure immediately fails the build and blocks deployment.
+// VERSION 2: FAIL-FAST + SMART SLACK NOTIFICATIONS
+//
+// SECURITY SCAN BEHAVIOUR:
+//   Critical findings  → FAIL pipeline    → Slack to #app-alerts
+//   High/Medium/Low    → UNSTABLE pipeline → Slack to #app-alerts
+//   Pipeline errors    → FAIL pipeline    → Slack to #devops-alerts
+//   All passed         → SUCCESS          → Slack to both channels
+//
+// CRITICAL DEFINITIONS:
+//   Gitleaks  : any secret found
+//   SonarQube : quality gate status = ERROR
+//   npm/Snyk  : CRITICAL severity CVEs
+//   Trivy     : CRITICAL severity CVEs
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pipeline {
@@ -11,7 +22,14 @@ pipeline {
     }
 
     environment {
-        IMAGE_TAG = "${BUILD_NUMBER}"
+        IMAGE_TAG        = "${BUILD_NUMBER}"
+        // Slack channels
+        SLACK_APP_CHANNEL     = '#app-alerts'
+        SLACK_DEVOPS_CHANNEL  = '#devops-alerts'
+        // Failure tracking — set by helper functions before calling error()/unstable()
+        FAILURE_TYPE     = ''   // 'APP_CRITICAL', 'APP_UNSTABLE', 'PIPELINE'
+        FAILURE_STAGE    = ''
+        FAILURE_REASON   = ''
     }
 
     stages {
@@ -31,15 +49,16 @@ pipeline {
                     def parsed = readJSON text: params
 
                     if (!parsed || parsed.size() == 0) {
-                        error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Configure Environment'
+                        env.FAILURE_REASON = 'No SSM parameters found at /jenkins/cicd/ — run terraform apply'
+                        error(env.FAILURE_REASON)
                     }
 
                     def ssm = parsed.collectEntries {
                         def key = it.Name.replace('/jenkins/cicd/', '')
                         [(key): it.Value]
                     }
-
-                    echo "Parsed SSM map: ${ssm}"
 
                     env.AWS_REGION      = ssm['aws-region']
                     env.ECR_REPO        = ssm['ecr-repo']
@@ -69,26 +88,45 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
-                echo 'Checking out code...'
-                checkout scm
+                script {
+                    try {
+                        echo 'Checking out code...'
+                        checkout scm
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Checkout'
+                        env.FAILURE_REASON = "Failed to checkout source code: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
+                }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 3. SECRET SCANNING (FAIL-FAST)
+        // 3. SECRET SCANNING
+        //    Any secret found = CRITICAL → FAIL
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
-                echo 'Scanning for secrets with Gitleaks...'
-                sh '''
-                    docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
-                        --source /repo \
-                        --report-path /repo/gitleaks-report.json \
-                        --report-format json \
-                        --no-git || true
-                '''
                 script {
-                    checkGitleaksReport()
+                    try {
+                        echo 'Scanning for secrets with Gitleaks...'
+                        sh '''
+                            docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
+                                --source /repo \
+                                --report-path /repo/gitleaks-report.json \
+                                --report-format json \
+                                --no-git || true
+                        '''
+                        checkGitleaksReport()
+                    } catch (err) {
+                        if (env.FAILURE_TYPE == '') {
+                            env.FAILURE_TYPE   = 'PIPELINE'
+                            env.FAILURE_STAGE  = 'Secret Scanning'
+                            env.FAILURE_REASON = "Gitleaks scanner error: ${err.message}"
+                        }
+                        error(err.message)
+                    }
                 }
             }
         }
@@ -98,32 +136,63 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Install Dependencies') {
             steps {
-                echo 'Installing dependencies...'
-                sh 'npm ci'
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // 5. SAST - SONARQUBE (FAIL-FAST)
-        // ─────────────────────────────────────────────
-        stage('SAST - SonarQube') {
-            steps {
-                echo 'Running SAST with SonarQube...'
                 script {
-                    runSonarQubeScan()
+                    try {
+                        echo 'Installing dependencies...'
+                        sh 'npm ci'
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Install Dependencies'
+                        env.FAILURE_REASON = "npm ci failed — check package.json or network: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 6. SCA - DEPENDENCY CHECK (FAIL-FAST)
+        // 5. SAST - SONARQUBE
+        //    ERROR status = CRITICAL → FAIL
+        //    WARN status  = non-critical → UNSTABLE
+        // ─────────────────────────────────────────────
+        stage('SAST - SonarQube') {
+            steps {
+                script {
+                    try {
+                        echo 'Running SAST with SonarQube...'
+                        runSonarQubeScan()
+                    } catch (err) {
+                        if (env.FAILURE_TYPE == '') {
+                            env.FAILURE_TYPE   = 'PIPELINE'
+                            env.FAILURE_STAGE  = 'SAST - SonarQube'
+                            env.FAILURE_REASON = "SonarQube scanner error: ${err.message}"
+                        }
+                        error(err.message)
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 6. SCA - DEPENDENCY CHECK
+        //    CRITICAL CVEs = CRITICAL → FAIL
+        //    HIGH/MEDIUM   = non-critical → UNSTABLE
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
-                echo 'Running SCA with npm audit and Snyk...'
                 script {
-                    runNpmAudit()
-                    runSnykScan()
+                    try {
+                        echo 'Running SCA with npm audit and Snyk...'
+                        runNpmAudit()
+                        runSnykScan()
+                    } catch (err) {
+                        if (env.FAILURE_TYPE == '') {
+                            env.FAILURE_TYPE   = 'PIPELINE'
+                            env.FAILURE_STAGE  = 'SCA - Dependency Check'
+                            env.FAILURE_REASON = "SCA scanner error: ${err.message}"
+                        }
+                        error(err.message)
+                    }
                 }
             }
         }
@@ -133,8 +202,17 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Unit Tests') {
             steps {
-                echo 'Running unit tests...'
-                sh 'npm test'
+                script {
+                    try {
+                        echo 'Running unit tests...'
+                        sh 'npm test'
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Unit Tests'
+                        env.FAILURE_REASON = "Unit tests failed: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
+                }
             }
         }
 
@@ -143,11 +221,20 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Build Docker Image') {
             steps {
-                echo 'Building Docker image...'
-                sh '''
-                    docker build -t $ECR_REPO:$BUILD_NUMBER .
-                    docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REPO:latest
-                '''
+                script {
+                    try {
+                        echo 'Building Docker image...'
+                        sh '''
+                            docker build -t $ECR_REPO:$BUILD_NUMBER .
+                            docker tag $ECR_REPO:$BUILD_NUMBER $ECR_REPO:latest
+                        '''
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Build Docker Image'
+                        env.FAILURE_REASON = "Docker build failed: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
+                }
             }
         }
 
@@ -156,47 +243,67 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Generate SBOM') {
             steps {
-                echo 'Generating SBOM with Syft...'
-                sh '''
-                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                        anchore/syft:latest $ECR_REPO:$BUILD_NUMBER \
-                        -o cyclonedx-json > sbom-cyclonedx.json
-
-                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                        anchore/syft:latest $ECR_REPO:$BUILD_NUMBER \
-                        -o spdx-json > sbom-spdx.json
-                '''
-                archiveArtifacts artifacts: 'sbom-*.json', fingerprint: true
-            }
-        }
-
-        // ─────────────────────────────────────────────
-        // 10. CONTAINER IMAGE SCAN - TRIVY (FAIL-FAST)
-        // ─────────────────────────────────────────────
-        stage('Container Image Scan') {
-            steps {
-                echo 'Scanning container image with Trivy...'
-                sh '''
-                    docker run --rm \
-                    -v /var/run/docker.sock:/var/run/docker.sock \
-                    -v $WORKSPACE:/workspace \
-                    aquasec/trivy:latest \
-                    image --format json \
-                    --output /workspace/trivy-report.json \
-                    $ECR_REPO:$BUILD_NUMBER
-                '''
                 script {
-                    analyzeTrivyReport()
+                    try {
+                        echo 'Generating SBOM with Syft...'
+                        sh '''
+                            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                                anchore/syft:latest $ECR_REPO:$BUILD_NUMBER \
+                                -o cyclonedx-json > sbom-cyclonedx.json
+
+                            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                                anchore/syft:latest $ECR_REPO:$BUILD_NUMBER \
+                                -o spdx-json > sbom-spdx.json
+                        '''
+                        archiveArtifacts artifacts: 'sbom-*.json', fingerprint: true
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Generate SBOM'
+                        env.FAILURE_REASON = "Syft SBOM generation failed: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 11. QUALITY GATE (FAIL-FAST)
+        // 10. CONTAINER IMAGE SCAN - TRIVY
+        //     CRITICAL CVEs = CRITICAL → FAIL
+        //     HIGH/MEDIUM   = non-critical → UNSTABLE
+        // ─────────────────────────────────────────────
+        stage('Container Image Scan') {
+            steps {
+                script {
+                    try {
+                        echo 'Scanning container image with Trivy...'
+                        sh '''
+                            docker run --rm \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v $WORKSPACE:/workspace \
+                            aquasec/trivy:latest \
+                            image --format json \
+                            --output /workspace/trivy-report.json \
+                            $ECR_REPO:$BUILD_NUMBER
+                        '''
+                        analyzeTrivyReport()
+                    } catch (err) {
+                        if (env.FAILURE_TYPE == '') {
+                            env.FAILURE_TYPE   = 'PIPELINE'
+                            env.FAILURE_STAGE  = 'Container Image Scan'
+                            env.FAILURE_REASON = "Trivy scanner error: ${err.message}"
+                        }
+                        error(err.message)
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 11. QUALITY GATE
         // ─────────────────────────────────────────────
         stage('Quality Gate Check') {
             steps {
-                echo 'Fail-fast mode: all security gates must pass before deployment'
+                echo 'All security gates passed — proceeding to deployment'
             }
         }
 
@@ -205,9 +312,16 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Push to ECR') {
             steps {
-                echo 'Pushing image to Amazon ECR...'
                 script {
-                    pushToECR()
+                    try {
+                        echo 'Pushing image to Amazon ECR...'
+                        pushToECR()
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Push to ECR'
+                        env.FAILURE_REASON = "Failed to push image to ECR: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
@@ -217,9 +331,16 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Update ECS Task Definition') {
             steps {
-                echo 'Registering new ECS task definition...'
                 script {
-                    updateECSTaskDefinition()
+                    try {
+                        echo 'Registering new ECS task definition...'
+                        updateECSTaskDefinition()
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Update ECS Task Definition'
+                        env.FAILURE_REASON = "Failed to register ECS task definition: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
@@ -229,9 +350,16 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Deploy to ECS') {
             steps {
-                echo 'Updating ECS service with new task definition...'
                 script {
-                    deployToECS()
+                    try {
+                        echo 'Updating ECS service with new task definition...'
+                        deployToECS()
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Deploy to ECS'
+                        env.FAILURE_REASON = "ECS deployment failed or service did not stabilize: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
@@ -241,9 +369,16 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Verify Deployment') {
             steps {
-                echo 'Verifying deployment health...'
                 script {
-                    verifyDeployment()
+                    try {
+                        echo 'Verifying deployment health...'
+                        verifyDeployment()
+                    } catch (err) {
+                        env.FAILURE_TYPE   = 'PIPELINE'
+                        env.FAILURE_STAGE  = 'Verify Deployment'
+                        env.FAILURE_REASON = "Deployment verification failed — running count does not match desired: ${err.message}"
+                        error(env.FAILURE_REASON)
+                    }
                 }
             }
         }
@@ -266,7 +401,6 @@ pipeline {
     // ─────────────────────────────────────────────
     post {
         always {
-            echo 'Archiving security reports and artifacts...'
             archiveArtifacts artifacts: '**/*-report.json, sbom-*.json',
                             fingerprint: true,
                             allowEmptyArchive: true
@@ -291,52 +425,126 @@ pipeline {
             cleanWs()
         }
 
+        // ─────────────────────────────────────────────
+        // SUCCESS → both channels
+        // ─────────────────────────────────────────────
         success {
-            echo "Pipeline completed successfully! Build #${BUILD_NUMBER} deployed to ECS."
             script {
-                def message = """
-                 Deployment Successful (Fail-Fast Mode)
+                def msg = """
+✅ *Deployment Successful*
 
-                Build:       #${BUILD_NUMBER}
-                Image:       ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
-                ECS Cluster: ${ECS_CLUSTER}
-                ECS Service: ${ECS_SERVICE}
+*Build:*       #${BUILD_NUMBER}
+*Branch:*      ${env.GIT_BRANCH ?: 'N/A'}
+*Image:*       ${env.ECR_REGISTRY}/${env.ECR_REPO}:${env.IMAGE_TAG}
+*ECS Cluster:* ${env.ECS_CLUSTER}
+*ECS Service:* ${env.ECS_SERVICE}
+*Duration:*    ${currentBuild.durationString}
 
-                Security Scans (all passed — no findings blocked deployment):
-                  - Gitleaks  (Secret Scanning)
-                  - SonarQube (SAST)
-                  - npm audit + Snyk (SCA)
-                  - Trivy     (Container Scan)
+✔ Gitleaks  — No secrets found
+✔ SonarQube — Quality gate passed
+✔ npm audit — No critical CVEs
+✔ Snyk      — No critical CVEs
+✔ Trivy     — No critical CVEs
 
-                Artifacts:
-                  - SBOM (CycloneDX & SPDX)
-                  - Security scan reports
-                """
-                echo message
+<${env.BUILD_URL}|View Build>
+                """.stripIndent()
+
+                slackSend(channel: env.SLACK_APP_CHANNEL,    color: 'good', message: msg)
+                slackSend(channel: env.SLACK_DEVOPS_CHANNEL, color: 'good', message: msg)
             }
         }
 
+        // ─────────────────────────────────────────────
+        // UNSTABLE → app non-critical findings → #app-alerts only
+        // ─────────────────────────────────────────────
+        unstable {
+            script {
+                slackSend(
+                    channel: env.SLACK_APP_CHANNEL,
+                    color: 'warning',
+                    message: """
+⚠️ *Build UNSTABLE — Non-Critical Security Findings*
+
+*Build:*         #${BUILD_NUMBER}
+*Branch:*        ${env.GIT_BRANCH ?: 'N/A'}
+*Duration:*      ${currentBuild.durationString}
+*Failed Stage:*  ${env.FAILURE_STAGE ?: 'See report'}
+*Issue Type:*    🟡 Application Issue (non-critical)
+*Reason:*        ${env.FAILURE_REASON ?: 'High/Medium/Low severity findings detected'}
+
+Deployment proceeded but findings require attention.
+Review scan reports and fix before next release.
+
+<${env.BUILD_URL}|View Build> | <${env.BUILD_URL}console|View Logs>
+                    """.stripIndent()
+                )
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // FAILURE → route based on FAILURE_TYPE
+        //   APP_CRITICAL → #app-alerts
+        //   PIPELINE     → #devops-alerts
+        // ─────────────────────────────────────────────
         failure {
-            echo " Pipeline FAILED — security gate blocked deployment. Review reports before retrying."
+            script {
+                def isAppIssue = env.FAILURE_TYPE == 'APP_CRITICAL'
+                def channel    = isAppIssue ? env.SLACK_APP_CHANNEL : env.SLACK_DEVOPS_CHANNEL
+                def issueLabel = isAppIssue
+                    ? '🔴 Application Issue (Critical)'
+                    : '⚙️ Pipeline / Infrastructure Issue'
+                def actionLine = isAppIssue
+                    ? 'Fix the critical findings in the code or dependencies before retrying.'
+                    : 'Check AWS credentials, Docker, ECS configuration, or Jenkins setup.'
+
+                slackSend(
+                    channel: channel,
+                    color: 'danger',
+                    message: """
+❌ *Deployment FAILED*
+
+*Build:*         #${BUILD_NUMBER}
+*Branch:*        ${env.GIT_BRANCH ?: 'N/A'}
+*Duration:*      ${currentBuild.durationString}
+*Failed Stage:*  ${env.FAILURE_STAGE ?: 'Unknown'}
+*Issue Type:*    ${issueLabel}
+*Reason:*        ${env.FAILURE_REASON ?: 'Check console logs for details'}
+
+${actionLine}
+
+<${env.BUILD_URL}|View Build> | <${env.BUILD_URL}console|View Logs>
+                    """.stripIndent()
+                )
+            }
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS — FAIL-FAST VARIANTS
-// error() stops the pipeline immediately on any finding.
+// HELPER FUNCTIONS
+//
+// Each scanner sets FAILURE_TYPE, FAILURE_STAGE, FAILURE_REASON before
+// calling error() or unstable() so the post block knows where to route.
+//
+// APP_CRITICAL  → error()    → pipeline FAILS    → #app-alerts
+// APP_UNSTABLE  → unstable() → pipeline UNSTABLE → #app-alerts
+// PIPELINE      → error()    → pipeline FAILS    → #devops-alerts
 // ═══════════════════════════════════════════════════════════════════════════════
 
 def checkGitleaksReport() {
+    // Any secret found = CRITICAL → FAIL
     if (fileExists('gitleaks-report.json')) {
         def report = readJSON file: 'gitleaks-report.json'
         if (report && report.size() > 0) {
-            error(" BLOCKED: ${report.size()} secret(s) detected — fix before deploying. Review gitleaks-report.json")
+            env.FAILURE_TYPE   = 'APP_CRITICAL'
+            env.FAILURE_STAGE  = 'Secret Scanning'
+            env.FAILURE_REASON = "${report.size()} secret(s) detected in source code — remove all hardcoded secrets immediately"
+            error(env.FAILURE_REASON)
         } else {
-            echo ' No secrets detected'
+            echo 'No secrets detected'
         }
     } else {
-        echo ' No Gitleaks report found — skipping secret check'
+        echo 'No Gitleaks report found — skipping secret check'
     }
 }
 
@@ -352,32 +560,70 @@ def runSonarQubeScan() {
     }
     timeout(time: 5, unit: 'MINUTES') {
         def qg = waitForQualityGate()
-        if (qg.status != 'OK') {
-            error(" BLOCKED: SonarQube quality gate failed: ${qg.status} — fix issues before deploying")
+        if (qg.status == 'ERROR') {
+            // ERROR = Critical → FAIL
+            env.FAILURE_TYPE   = 'APP_CRITICAL'
+            env.FAILURE_STAGE  = 'SAST - SonarQube'
+            env.FAILURE_REASON = "SonarQube quality gate status: ERROR — critical code issues must be fixed"
+            error(env.FAILURE_REASON)
+        } else if (qg.status != 'OK') {
+            // WARN or other = non-critical → UNSTABLE
+            env.FAILURE_TYPE   = 'APP_UNSTABLE'
+            env.FAILURE_STAGE  = 'SAST - SonarQube'
+            env.FAILURE_REASON = "SonarQube quality gate status: ${qg.status} — non-critical issues detected"
+            unstable(env.FAILURE_REASON)
         } else {
-            echo ' SAST passed'
+            echo 'SonarQube SAST passed'
         }
     }
 }
 
 def runNpmAudit() {
     sh 'npm audit --json > npm-audit-report.json || true'
-    def exitCode = sh(script: 'npm audit --audit-level=high', returnStatus: true)
-    if (exitCode != 0) {
-        error(" BLOCKED: High/Critical vulnerabilities found by npm audit — fix before deploying")
+
+    // Check for CRITICAL CVEs → FAIL
+    def criticalExit = sh(script: 'npm audit --audit-level=critical', returnStatus: true)
+    if (criticalExit != 0) {
+        env.FAILURE_TYPE   = 'APP_CRITICAL'
+        env.FAILURE_STAGE  = 'SCA - npm audit'
+        env.FAILURE_REASON = 'CRITICAL severity CVEs found by npm audit — update affected dependencies'
+        error(env.FAILURE_REASON)
+    }
+
+    // Check for HIGH CVEs → UNSTABLE
+    def highExit = sh(script: 'npm audit --audit-level=high', returnStatus: true)
+    if (highExit != 0) {
+        env.FAILURE_TYPE   = 'APP_UNSTABLE'
+        env.FAILURE_STAGE  = 'SCA - npm audit'
+        env.FAILURE_REASON = 'High severity CVEs found by npm audit — review npm-audit-report.json'
+        unstable(env.FAILURE_REASON)
     } else {
-        echo ' npm audit passed'
+        echo 'npm audit passed'
     }
 }
 
 def runSnykScan() {
     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
         sh 'npx snyk test --json > snyk-report.json || true'
-        def exitCode = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
-        if (exitCode != 0) {
-            error(" BLOCKED: High/Critical vulnerabilities found by Snyk — fix before deploying")
+
+        // Check for CRITICAL CVEs → FAIL
+        def criticalExit = sh(script: 'npx snyk test --severity-threshold=critical', returnStatus: true)
+        if (criticalExit != 0) {
+            env.FAILURE_TYPE   = 'APP_CRITICAL'
+            env.FAILURE_STAGE  = 'SCA - Snyk'
+            env.FAILURE_REASON = 'CRITICAL severity CVEs found by Snyk — update affected dependencies'
+            error(env.FAILURE_REASON)
+        }
+
+        // Check for HIGH CVEs → UNSTABLE
+        def highExit = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
+        if (highExit != 0) {
+            env.FAILURE_TYPE   = 'APP_UNSTABLE'
+            env.FAILURE_STAGE  = 'SCA - Snyk'
+            env.FAILURE_REASON = 'High severity CVEs found by Snyk — review snyk-report.json'
+            unstable(env.FAILURE_REASON)
         } else {
-            echo ' Snyk scan passed'
+            echo 'Snyk scan passed'
         }
     }
 }
@@ -385,21 +631,33 @@ def runSnykScan() {
 def analyzeTrivyReport() {
     def trivyReport = readJSON file: 'trivy-report.json'
     def criticalCount = 0
-    def highCount = 0
+    def highCount     = 0
+    def mediumCount   = 0
 
     trivyReport.Results?.each { result ->
         result.Vulnerabilities?.each { vuln ->
             if (vuln.Severity == 'CRITICAL') criticalCount++
             if (vuln.Severity == 'HIGH')     highCount++
+            if (vuln.Severity == 'MEDIUM')   mediumCount++
         }
     }
 
-    echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
+    echo "Trivy found: ${criticalCount} Critical, ${highCount} High, ${mediumCount} Medium"
 
-    if (criticalCount > 0 || highCount > 0) {
-        error(" BLOCKED: ${criticalCount} Critical and ${highCount} High vulnerabilities found — fix before deploying")
+    if (criticalCount > 0) {
+        // CRITICAL CVEs → FAIL
+        env.FAILURE_TYPE   = 'APP_CRITICAL'
+        env.FAILURE_STAGE  = 'Container Image Scan'
+        env.FAILURE_REASON = "${criticalCount} CRITICAL CVEs found in container image — update base image or dependencies"
+        error(env.FAILURE_REASON)
+    } else if (highCount > 0 || mediumCount > 0) {
+        // HIGH/MEDIUM → UNSTABLE
+        env.FAILURE_TYPE   = 'APP_UNSTABLE'
+        env.FAILURE_STAGE  = 'Container Image Scan'
+        env.FAILURE_REASON = "${highCount} High and ${mediumCount} Medium CVEs found in container image — review trivy-report.json"
+        unstable(env.FAILURE_REASON)
     } else {
-        echo ' Container scan passed'
+        echo 'Container image scan passed'
     }
 }
 
@@ -486,9 +744,9 @@ def verifyDeployment() {
         echo "Running Tasks: $RUNNING_COUNT/$DESIRED_COUNT"
 
         if [ "$SERVICE_STATUS" = "ACTIVE" ] && [ "$RUNNING_COUNT" = "$DESIRED_COUNT" ]; then
-            echo " Deployment verification successful"
+            echo "Deployment verification successful"
         else
-            echo " Deployment verification failed"
+            echo "Deployment verification failed"
             exit 1
         fi
     '''
