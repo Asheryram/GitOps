@@ -94,3 +94,9 @@ output "public_subnets" {
   description = "Public subnet IDs for ECS service"
   value       = module.vpc.public_subnets
 }
+
+# SSM Parameter Store Outputs
+output "ssm_parameter_path" {
+  description = "Base path for Jenkins CI/CD SSM parameters"
+  value       = module.ssm.ssm_parameter_path
+}

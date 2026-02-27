@@ -118,3 +118,19 @@ module "ecs" {
   ecr_repository_url = module.ecr.repository_url
   aws_region         = var.aws_region
 }
+
+# SSM Parameter Store Module
+module "ssm" {
+  source = "./modules/ssm"
+
+  project_name      = var.project_name
+  environment       = var.environment
+  aws_region        = var.aws_region
+  ecr_repo_name     = module.ecr.repository_name
+  ecs_cluster_name  = module.ecs.cluster_name
+  ecs_service_name  = module.ecs.service_name
+  ecs_task_family   = module.ecs.task_definition_family
+  sonar_project     = var.sonar_project
+  sonar_org         = var.sonar_org
+  images_to_keep    = var.images_to_keep
+}

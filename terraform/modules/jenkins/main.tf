@@ -58,6 +58,13 @@ resource "aws_iam_role_policy" "jenkins_secrets_access" {
           "ecr:GetAuthorizationToken"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParametersByPath"
+        ]
+        Resource = "arn:aws:ssm:${var.aws_region}:*:parameter/jenkins/cicd/*"
       }
     ]
   })

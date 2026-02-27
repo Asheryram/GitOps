@@ -61,3 +61,21 @@ variable "jenkins_admin_password" {
   type        = string
   sensitive   = true
 }
+
+variable "sonar_project" {
+  description = "SonarQube project key"
+  type        = string
+  default     = "jenkins-cicd-pipeline"
+}
+
+variable "sonar_org" {
+  description = "SonarQube organization"
+  type        = string
+  default     = "default"
+}
+
+variable "images_to_keep" {
+  description = "Number of ECR images to keep"
+  type        = string
+  default     = "5"
+}

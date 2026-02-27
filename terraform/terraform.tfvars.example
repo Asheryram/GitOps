@@ -14,3 +14,7 @@ app_instance_type     = "t3.micro"
 # NOTE: Set a real password here or pass via CLI: terraform apply -var='jenkins_admin_password=...'
 # This password is now stored securely  AWS Secrets Manager (not in EC2 user data).
 jenkins_admin_password = "your-secure-password-here"
+
+sonar_project  = "jenkins-cicd-pipeline"
+sonar_org      = "default"
+images_to_keep = "5"

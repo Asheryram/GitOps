@@ -13,19 +13,58 @@ pipeline {
     }
 
     environment {
-        AWS_REGION       = 'eu-central-1'
-        ECR_REGISTRY     = '962496666337.dkr.ecr.eu-central-1.amazonaws.com'
+        // These will be loaded from SSM Parameter Store
+        AWS_REGION       = ''
+        ECR_REGISTRY     = ''
         IMAGE_TAG        = "${BUILD_NUMBER}"
-        ECR_REPO         = 'jenkins-cicd-pipeline-app'
-        ECS_CLUSTER      = 'jenkins-cicd-pipeline-cluster'
-        ECS_SERVICE      = 'jenkins-cicd-pipeline-service'
-        ECS_TASK_FAMILY  = 'jenkins-cicd-pipeline-task'
+        ECR_REPO         = ''
+        ECS_CLUSTER      = ''
+        ECS_SERVICE      = ''
+        ECS_TASK_FAMILY  = ''
+        SONAR_PROJECT    = ''
+        SONAR_ORG        = ''
+        IMAGES_TO_KEEP   = ''
     }
+
+    def unstableError = [buildResult: 'UNSTABLE', stageResult: 'UNSTABLE']
 
     stages {
 
         // ─────────────────────────────────────────────
-        // 1. CHECKOUT
+        // 1. CONFIGURE ENVIRONMENT
+        // ─────────────────────────────────────────────
+        stage('Configure Environment') {
+            steps {
+                script {
+                    def params = sh(
+                        script: "aws ssm get-parameters-by-path --path '/jenkins/cicd/' " +
+                               "--query 'Parameters[*].{Name:Name,Value:Value}' --output json",
+                        returnStdout: true
+                    ).trim()
+
+                    def parsed = readJSON text: params
+                    def ssm = parsed.collectEntries { [(it.Name.split('/').last()): it.Value] }
+
+                    env.AWS_REGION      = ssm['aws-region']
+                    env.ECR_REPO        = ssm['ecr-repo']
+                    env.ECS_CLUSTER     = ssm['ecs-cluster']
+                    env.ECS_SERVICE     = ssm['ecs-service']
+                    env.ECS_TASK_FAMILY = ssm['ecs-task-family']
+                    env.SONAR_PROJECT   = ssm['sonar-project']
+                    env.SONAR_ORG       = ssm['sonar-org']
+                    env.IMAGES_TO_KEEP  = ssm['images-to-keep']
+                    env.ECR_REGISTRY    = sh(
+                        script: "aws sts get-caller-identity --query Account --output text",
+                        returnStdout: true
+                    ).trim() + ".dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+
+                    echo "Environment configured from SSM (1 API call)"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. CHECKOUT
         // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
@@ -39,7 +78,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                catchError(unstableError) {
                     echo 'Scanning for secrets with Gitleaks...'
                     sh '''
                         docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
@@ -48,9 +87,7 @@ pipeline {
                             --report-format json \
                             --no-git || true
                     '''
-                    script {
-                        checkGitleaksReport()
-                    }
+                    checkGitleaksReport()
                 }
             }
         }
@@ -70,11 +107,9 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('SAST - SonarQube') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                catchError(unstableError) {
                     echo 'Running SAST with SonarQube...'
-                    script {
-                        runSonarQubeScan()
-                    }
+                    runSonarQubeScan()
                 }
             }
         }
@@ -84,12 +119,10 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                catchError(unstableError) {
                     echo 'Running SCA with npm audit and Snyk...'
-                    script {
-                        runNpmAudit()
-                        runSnykScan()
-                    }
+                    runNpmAudit()
+                    runSnykScan()
                 }
             }
         }
@@ -141,7 +174,7 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Container Image Scan') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                catchError(unstableError) {
                     echo 'Scanning container image with Trivy...'
                     sh '''
                         docker run --rm \
@@ -152,9 +185,7 @@ pipeline {
                         --output /workspace/trivy-report.json \
                         $ECR_REPO:$BUILD_NUMBER
                     '''
-                    script {
-                        analyzeTrivyReport()
-                    }
+                    analyzeTrivyReport()
                 }
             }
         }
@@ -318,8 +349,8 @@ def runSonarQubeScan() {
     withSonarQubeEnv('SonarQube') {
         sh '''
             sonar-scanner \
-                -Dsonar.projectKey=cicd-node-app \
-                -Dsonar.organization=asheryram \
+                -Dsonar.projectKey=$SONAR_PROJECT \
+                -Dsonar.organization=$SONAR_ORG \
                 -Dsonar.sources=. \
                 -Dsonar.exclusions=node_modules/**,test/**
         '''
@@ -366,8 +397,12 @@ def analyzeTrivyReport() {
 
     trivyReport.Results?.each { result ->
         result.Vulnerabilities?.each { vuln ->
-            if (vuln.Severity == 'CRITICAL') criticalCount++
-            if (vuln.Severity == 'HIGH')     highCount++
+            if (vuln.Severity == 'CRITICAL') {
+                criticalCount++
+            }
+            if (vuln.Severity == 'HIGH') {
+                highCount++
+            }
         }
     }
 
@@ -477,11 +512,11 @@ def cleanupOldImages() {
         OLD_IMAGES=$(aws ecr list-images \
             --repository-name $ECR_REPO \
             --filter tagStatus=TAGGED \
-            --query 'imageIds[10:]' \
+            --query 'imageIds[${IMAGES_TO_KEEP}:]' \
             --output json)
 
         if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
-            echo "Deleting old images..."
+            echo "Deleting old images (keeping ${IMAGES_TO_KEEP} most recent)..."
             aws ecr batch-delete-image \
                 --repository-name $ECR_REPO \
                 --image-ids "$OLD_IMAGES" || true
