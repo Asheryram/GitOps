@@ -717,7 +717,7 @@ def runSnykScan() {
             env.FAILURE_REASON  = "${criticalList.size()} CRITICAL CVEs found by Snyk"
             env.VULN_COUNTS     = "🔴 Critical: ${criticalList.size()} | 🟠 High: ${vulns.findAll { it.severity == 'high' }.size()} | 🟡 Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
             env.FAILURE_SUMMARY = details + more
-            error(env.FAILURE_REASON)
+            throw new Exception(env.FAILURE_REASON)
         }
 
         // Check HIGH CVEs → UNSTABLE
@@ -781,7 +781,7 @@ def analyzeTrivyReport() {
         env.FAILURE_REASON  = "${criticalCount} CRITICAL CVEs found in container image"
         env.VULN_COUNTS     = "🔴 Critical: ${criticalCount} | 🟠 High: ${highCount} | 🟡 Medium: ${mediumCount} | ⚪ Low: ${lowCount}"
         env.FAILURE_SUMMARY = details + more
-        error(env.FAILURE_REASON)
+        throw new Exception(env.FAILURE_REASON)
     } else if (highCount > 0 || mediumCount > 0) {
         def details = highVulns.take(5).join('\n')
         def more    = highCount > 5 ? "\n_...and ${highCount - 5} more. See trivy-report.json_" : ''
