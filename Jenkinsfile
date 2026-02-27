@@ -426,6 +426,15 @@ pipeline {
     // ─────────────────────────────────────────────
     post {
         always {
+            script {
+                // Capture env vars IMMEDIATELY before anything else
+                env.FINAL_FAILURE_TYPE    = env.FAILURE_TYPE ?: ''
+                env.FINAL_FAILURE_STAGE   = env.FAILURE_STAGE ?: ''
+                env.FINAL_FAILURE_REASON  = env.FAILURE_REASON ?: ''
+                env.FINAL_FAILURE_SUMMARY = env.FAILURE_SUMMARY ?: ''
+                env.FINAL_VULN_COUNTS     = env.VULN_COUNTS ?: ''
+            }
+
             archiveArtifacts artifacts: '**/*-report.json, sbom-*.json',
                             fingerprint: true,
                             allowEmptyArchive: true
@@ -446,9 +455,6 @@ pipeline {
                 docker rmi $ECR_REGISTRY/$ECR_REPO:latest || true
                 docker system prune -f || true
             '''
-
-            // cleanWs() moved to cleanup block — runs AFTER Slack notifications
-            // so env vars (FAILURE_TYPE, FAILURE_REASON etc.) are still available
         }
 
         // ─────────────────────────────────────────────
@@ -511,14 +517,14 @@ pipeline {
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
 *Commit:*       '${env.GIT_COMMIT_SHORT ?: 'N/A'}' by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
 *Duration:*     ${currentBuild.durationString}
-*Stage:*        ${env.FAILURE_STAGE ?: 'See report'}
+*Stage:*        ${env.FINAL_FAILURE_STAGE ?: 'See report'}
 *Issue Type:*   🟡 Application Issue (non-critical)
-*Summary:*      ${env.FAILURE_REASON ?: 'High/Medium/Low severity findings detected'}
+*Summary:*      ${env.FINAL_FAILURE_REASON ?: 'High/Medium/Low severity findings detected'}
 
-${env.VULN_COUNTS ? '*Vulnerability Counts:*\n' + env.VULN_COUNTS : ''}
+${env.FINAL_VULN_COUNTS ? '*Vulnerability Counts:*\n' + env.FINAL_VULN_COUNTS : ''}
 
 *Findings (top 5):*
-${env.FAILURE_SUMMARY ?: '_No detailed summary available — check scan reports_'}
+${env.FINAL_FAILURE_SUMMARY ?: '_No detailed summary available — check scan reports_'}
 
 *Reports:*
 • <${env.BUILD_URL}artifact/trivy-report.json|Trivy Report>
@@ -542,7 +548,7 @@ Fix before next release.
         // ─────────────────────────────────────────────
         failure {
             script {
-                def isAppIssue = env.FAILURE_TYPE == 'APP_CRITICAL'
+                def isAppIssue = env.FINAL_FAILURE_TYPE == 'APP_CRITICAL'
                 def channel    = isAppIssue ? env.SLACK_APP_CHANNEL : env.SLACK_DEVOPS_CHANNEL
                 def issueLabel = isAppIssue
                     ? '🔴 Application Issue (Critical)'
@@ -570,14 +576,14 @@ Fix before next release.
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
 *Commit:*       '${env.GIT_COMMIT_SHORT ?: 'N/A'}' by ${env.GIT_COMMIT_AUTHOR ?: 'N/A'}
 *Duration:*     ${currentBuild.durationString}
-*Failed Stage:* ${env.FAILURE_STAGE ?: 'Unknown'}
+*Failed Stage:* ${env.FINAL_FAILURE_STAGE ?: 'Unknown'}
 *Issue Type:*   ${issueLabel}
-*Reason:*       ${env.FAILURE_REASON ?: 'Check console logs for details'}
+*Reason:*       ${env.FINAL_FAILURE_REASON ?: 'Check console logs for details'}
 
-${env.VULN_COUNTS ? '*Vulnerability Counts:*\n' + env.VULN_COUNTS : ''}
+${env.FINAL_VULN_COUNTS ? '*Vulnerability Counts:*\n' + env.FINAL_VULN_COUNTS : ''}
 
 *Findings / Details (top 5):*
-${env.FAILURE_SUMMARY ?: '_No detailed summary available — check console logs_'}
+${env.FINAL_FAILURE_SUMMARY ?: '_No detailed summary available — check console logs_'}
 
 ${actionLine}
 ${reportLinks}
