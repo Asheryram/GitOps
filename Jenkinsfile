@@ -1,8 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// VERSION 1: WARN-ONLY
-// All security scan failures mark the build UNSTABLE (yellow) but never block
-// deployment. Every scan stage is wrapped in catchError so the pipeline always
-// proceeds to Push → Deploy → Verify regardless of findings.
+// VERSION 2: FAIL-FAST
+// Any security scan failure immediately fails the build and blocks deployment.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pipeline {
@@ -12,7 +10,7 @@ pipeline {
         nodejs 'nodejs-20'
     }
 
-   environment {
+    environment {
         IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
@@ -30,18 +28,19 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    echo "Raw SSM response: ${params}"
-                    
                     def parsed = readJSON text: params
-                    
+
                     if (!parsed || parsed.size() == 0) {
                         error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
                     }
-                    def ssm = parsed.collectEntries { 
-                         def key = it.Name.replace('/jenkins/cicd/', '')
-                         [(key): it.Value] 
-                    }                
+
+                    def ssm = parsed.collectEntries {
+                        def key = it.Name.replace('/jenkins/cicd/', '')
+                        [(key): it.Value]
+                    }
+
                     echo "Parsed SSM map: ${ssm}"
+
                     env.AWS_REGION      = ssm['aws-region']
                     env.ECR_REPO        = ssm['ecr-repo']
                     env.ECS_CLUSTER     = ssm['ecs-cluster']
@@ -76,26 +75,26 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 2. SECRET SCANNING (warn only)
+        // 3. SECRET SCANNING (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    echo 'Scanning for secrets with Gitleaks...'
-                    sh '''
-                        docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
-                            --source /repo \
-                            --report-path /repo/gitleaks-report.json \
-                            --report-format json \
-                            --no-git || true
-                    '''
+                echo 'Scanning for secrets with Gitleaks...'
+                sh '''
+                    docker run --rm -v $(pwd):/repo zricethezav/gitleaks:latest detect \
+                        --source /repo \
+                        --report-path /repo/gitleaks-report.json \
+                        --report-format json \
+                        --no-git || true
+                '''
+                script {
                     checkGitleaksReport()
                 }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 3. INSTALL DEPENDENCIES
+        // 4. INSTALL DEPENDENCIES
         // ─────────────────────────────────────────────
         stage('Install Dependencies') {
             steps {
@@ -105,24 +104,24 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 4. SAST - SONARQUBE (warn only)
+        // 5. SAST - SONARQUBE (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('SAST - SonarQube') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    echo 'Running SAST with SonarQube...'
+                echo 'Running SAST with SonarQube...'
+                script {
                     runSonarQubeScan()
                 }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 5. SCA - DEPENDENCY CHECK (warn only)
+        // 6. SCA - DEPENDENCY CHECK (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    echo 'Running SCA with npm audit and Snyk...'
+                echo 'Running SCA with npm audit and Snyk...'
+                script {
                     runNpmAudit()
                     runSnykScan()
                 }
@@ -130,7 +129,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 6. UNIT TESTS
+        // 7. UNIT TESTS
         // ─────────────────────────────────────────────
         stage('Unit Tests') {
             steps {
@@ -140,7 +139,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 7. BUILD DOCKER IMAGE
+        // 8. BUILD DOCKER IMAGE
         // ─────────────────────────────────────────────
         stage('Build Docker Image') {
             steps {
@@ -153,7 +152,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 8. GENERATE SBOM
+        // 9. GENERATE SBOM
         // ─────────────────────────────────────────────
         stage('Generate SBOM') {
             steps {
@@ -172,37 +171,37 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 9. CONTAINER IMAGE SCAN - TRIVY (warn only)
+        // 10. CONTAINER IMAGE SCAN - TRIVY (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Container Image Scan') {
             steps {
-                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                    echo 'Scanning container image with Trivy...'
-                    sh '''
-                        docker run --rm \
-                        -v /var/run/docker.sock:/var/run/docker.sock \
-                        -v $WORKSPACE:/workspace \
-                        aquasec/trivy:latest \
-                        image --format json \
-                        --output /workspace/trivy-report.json \
-                        $ECR_REPO:$BUILD_NUMBER
-                    '''
+                echo 'Scanning container image with Trivy...'
+                sh '''
+                    docker run --rm \
+                    -v /var/run/docker.sock:/var/run/docker.sock \
+                    -v $WORKSPACE:/workspace \
+                    aquasec/trivy:latest \
+                    image --format json \
+                    --output /workspace/trivy-report.json \
+                    $ECR_REPO:$BUILD_NUMBER
+                '''
+                script {
                     analyzeTrivyReport()
                 }
             }
         }
 
         // ─────────────────────────────────────────────
-        // 10. QUALITY GATE (always passes in warn-only mode)
+        // 11. QUALITY GATE (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Quality Gate Check') {
             steps {
-                echo 'Warn-only mode: quality gate is informational only — proceeding to deployment'
+                echo 'Fail-fast mode: all security gates must pass before deployment'
             }
         }
 
         // ─────────────────────────────────────────────
-        // 11. PUSH TO ECR
+        // 12. PUSH TO ECR
         // ─────────────────────────────────────────────
         stage('Push to ECR') {
             steps {
@@ -214,7 +213,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 12. UPDATE ECS TASK DEFINITION
+        // 13. UPDATE ECS TASK DEFINITION
         // ─────────────────────────────────────────────
         stage('Update ECS Task Definition') {
             steps {
@@ -226,7 +225,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 13. DEPLOY TO ECS
+        // 14. DEPLOY TO ECS
         // ─────────────────────────────────────────────
         stage('Deploy to ECS') {
             steps {
@@ -238,7 +237,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 14. VERIFY DEPLOYMENT
+        // 15. VERIFY DEPLOYMENT
         // ─────────────────────────────────────────────
         stage('Verify Deployment') {
             steps {
@@ -250,7 +249,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 15. CLEANUP OLD ECR IMAGES
+        // 16. CLEANUP OLD ECR IMAGES
         // ─────────────────────────────────────────────
         stage('Cleanup Old Images') {
             steps {
@@ -296,14 +295,14 @@ pipeline {
             echo "Pipeline completed successfully! Build #${BUILD_NUMBER} deployed to ECS."
             script {
                 def message = """
-                 Deployment Successful (Warn-Only Mode)
+                 Deployment Successful (Fail-Fast Mode)
 
                 Build:       #${BUILD_NUMBER}
                 Image:       ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
                 ECS Cluster: ${ECS_CLUSTER}
                 ECS Service: ${ECS_SERVICE}
 
-                Security Scans (all warn-only — check reports for findings):
+                Security Scans (all passed — no findings blocked deployment):
                   - Gitleaks  (Secret Scanning)
                   - SonarQube (SAST)
                   - npm audit + Snyk (SCA)
@@ -317,28 +316,22 @@ pipeline {
             }
         }
 
-        unstable {
-            echo "  Pipeline completed UNSTABLE — security findings detected. " +
-                 "Deployment proceeded but review reports before next release."
-        }
-
         failure {
-            echo " Pipeline FAILED — check logs for technical issues (not security gates)."
+            echo " Pipeline FAILED — security gate blocked deployment. Review reports before retrying."
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS — WARN-ONLY VARIANTS
-// unstable() marks the build yellow but never stops the pipeline.
+// HELPER FUNCTIONS — FAIL-FAST VARIANTS
+// error() stops the pipeline immediately on any finding.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 def checkGitleaksReport() {
     if (fileExists('gitleaks-report.json')) {
         def report = readJSON file: 'gitleaks-report.json'
         if (report && report.size() > 0) {
-            echo "  WARNING: ${report.size()} secret(s) detected — review gitleaks-report.json"
-            unstable('Secret scanning found potential secrets — pipeline continues but marked unstable')
+            error(" BLOCKED: ${report.size()} secret(s) detected — fix before deploying. Review gitleaks-report.json")
         } else {
             echo ' No secrets detected'
         }
@@ -360,8 +353,7 @@ def runSonarQubeScan() {
     timeout(time: 5, unit: 'MINUTES') {
         def qg = waitForQualityGate()
         if (qg.status != 'OK') {
-            echo "  WARNING: SonarQube quality gate failed: ${qg.status} — deployment continues"
-            unstable("SonarQube quality gate failed: ${qg.status}")
+            error(" BLOCKED: SonarQube quality gate failed: ${qg.status} — fix issues before deploying")
         } else {
             echo ' SAST passed'
         }
@@ -372,8 +364,7 @@ def runNpmAudit() {
     sh 'npm audit --json > npm-audit-report.json || true'
     def exitCode = sh(script: 'npm audit --audit-level=high', returnStatus: true)
     if (exitCode != 0) {
-        echo '  WARNING: High/Critical vulnerabilities found by npm audit — deployment continues'
-        unstable('npm audit found High/Critical vulnerabilities')
+        error(" BLOCKED: High/Critical vulnerabilities found by npm audit — fix before deploying")
     } else {
         echo ' npm audit passed'
     }
@@ -384,8 +375,7 @@ def runSnykScan() {
         sh 'npx snyk test --json > snyk-report.json || true'
         def exitCode = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
         if (exitCode != 0) {
-            echo '⚠️  WARNING: High/Critical vulnerabilities found by Snyk — deployment continues'
-            unstable('Snyk found High/Critical vulnerabilities')
+            error(" BLOCKED: High/Critical vulnerabilities found by Snyk — fix before deploying")
         } else {
             echo ' Snyk scan passed'
         }
@@ -399,27 +389,22 @@ def analyzeTrivyReport() {
 
     trivyReport.Results?.each { result ->
         result.Vulnerabilities?.each { vuln ->
-            if (vuln.Severity == 'CRITICAL') {
-                criticalCount++
-            }
-            if (vuln.Severity == 'HIGH') {
-                highCount++
-            }
+            if (vuln.Severity == 'CRITICAL') criticalCount++
+            if (vuln.Severity == 'HIGH')     highCount++
         }
     }
 
     echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
 
     if (criticalCount > 0 || highCount > 0) {
-        echo "  WARNING: ${criticalCount} Critical and ${highCount} High vulnerabilities found — deployment continues"
-        unstable("Trivy found ${criticalCount} Critical and ${highCount} High vulnerabilities")
+        error(" BLOCKED: ${criticalCount} Critical and ${highCount} High vulnerabilities found — fix before deploying")
     } else {
         echo ' Container scan passed'
     }
 }
 
 // ─────────────────────────────────────────────
-// SHARED DEPLOY HELPERS (identical in both versions)
+// SHARED DEPLOY HELPERS
 // ─────────────────────────────────────────────
 
 def pushToECR() {
@@ -510,15 +495,16 @@ def verifyDeployment() {
 }
 
 def cleanupOldImages() {
+    def keepCount = env.IMAGES_TO_KEEP ?: '5'
     sh """
         OLD_IMAGES=\$(aws ecr list-images \
             --repository-name \$ECR_REPO \
             --filter tagStatus=TAGGED \
-            --query "imageIds[${env.IMAGES_TO_KEEP}:]" \
+            --query 'imageIds[${keepCount}:]' \
             --output json)
 
         if [ "\$OLD_IMAGES" != "[]" ] && [ "\$OLD_IMAGES" != "null" ]; then
-            echo "Deleting old images (keeping ${env.IMAGES_TO_KEEP} most recent)..."
+            echo "Deleting old images (keeping ${keepCount} most recent)..."
             aws ecr batch-delete-image \
                 --repository-name \$ECR_REPO \
                 --image-ids "\$OLD_IMAGES" || true

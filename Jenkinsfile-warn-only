@@ -12,20 +12,61 @@ pipeline {
         nodejs 'nodejs-20'
     }
 
-    environment {
-        AWS_REGION       = 'eu-central-1'
-        ECR_REGISTRY     = '962496666337.dkr.ecr.eu-central-1.amazonaws.com'
-        IMAGE_TAG        = "${BUILD_NUMBER}"
-        ECR_REPO         = 'jenkins-cicd-pipeline-app'
-        ECS_CLUSTER      = 'jenkins-cicd-pipeline-cluster'
-        ECS_SERVICE      = 'jenkins-cicd-pipeline-service'
-        ECS_TASK_FAMILY  = 'jenkins-cicd-pipeline-task'
+   environment {
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
 
         // ─────────────────────────────────────────────
-        // 1. CHECKOUT
+        // 1. CONFIGURE ENVIRONMENT
+        // ─────────────────────────────────────────────
+        stage('Configure Environment') {
+            steps {
+                script {
+                    def params = sh(
+                        script: '''aws ssm get-parameters-by-path --path /jenkins/cicd/ \
+                               --query 'Parameters[*].{Name:Name,Value:Value}' --output json''',
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Raw SSM response: ${params}"
+                    
+                    def parsed = readJSON text: params
+                    
+                    if (!parsed || parsed.size() == 0) {
+                        error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
+                    }
+                    def ssm = parsed.collectEntries { 
+                         def key = it.Name.replace('/jenkins/cicd/', '')
+                         [(key): it.Value] 
+                    }                
+                    echo "Parsed SSM map: ${ssm}"
+                    env.AWS_REGION      = ssm['aws-region']
+                    env.ECR_REPO        = ssm['ecr-repo']
+                    env.ECS_CLUSTER     = ssm['ecs-cluster']
+                    env.ECS_SERVICE     = ssm['ecs-service']
+                    env.ECS_TASK_FAMILY = ssm['ecs-task-family']
+                    env.SONAR_PROJECT   = ssm['sonar-project']
+                    env.SONAR_ORG       = ssm['sonar-org']
+                    env.IMAGES_TO_KEEP  = ssm['images-to-keep']
+                    env.ECR_REGISTRY    = sh(
+                        script: 'aws sts get-caller-identity --query Account --output text',
+                        returnStdout: true
+                    ).trim() + ".dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+
+                    echo "Environment configured from SSM (1 API call)"
+                    echo "AWS_REGION: ${env.AWS_REGION}"
+                    echo "ECR_REPO: ${env.ECR_REPO}"
+                    echo "ECR_REGISTRY: ${env.ECR_REGISTRY}"
+                    echo "ECS_CLUSTER: ${env.ECS_CLUSTER}"
+                    echo "ECS_SERVICE: ${env.ECS_SERVICE}"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. CHECKOUT
         // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
@@ -48,9 +89,7 @@ pipeline {
                             --report-format json \
                             --no-git || true
                     '''
-                    script {
-                        checkGitleaksReport()
-                    }
+                    checkGitleaksReport()
                 }
             }
         }
@@ -72,9 +111,7 @@ pipeline {
             steps {
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Running SAST with SonarQube...'
-                    script {
-                        runSonarQubeScan()
-                    }
+                    runSonarQubeScan()
                 }
             }
         }
@@ -86,10 +123,8 @@ pipeline {
             steps {
                 catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
                     echo 'Running SCA with npm audit and Snyk...'
-                    script {
-                        runNpmAudit()
-                        runSnykScan()
-                    }
+                    runNpmAudit()
+                    runSnykScan()
                 }
             }
         }
@@ -152,9 +187,7 @@ pipeline {
                         --output /workspace/trivy-report.json \
                         $ECR_REPO:$BUILD_NUMBER
                     '''
-                    script {
-                        analyzeTrivyReport()
-                    }
+                    analyzeTrivyReport()
                 }
             }
         }
@@ -318,8 +351,8 @@ def runSonarQubeScan() {
     withSonarQubeEnv('SonarQube') {
         sh '''
             sonar-scanner \
-                -Dsonar.projectKey=cicd-node-app \
-                -Dsonar.organization=asheryram \
+                -Dsonar.projectKey=$SONAR_PROJECT \
+                -Dsonar.organization=$SONAR_ORG \
                 -Dsonar.sources=. \
                 -Dsonar.exclusions=node_modules/**,test/**
         '''
@@ -351,7 +384,7 @@ def runSnykScan() {
         sh 'npx snyk test --json > snyk-report.json || true'
         def exitCode = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
         if (exitCode != 0) {
-            echo '  WARNING: High/Critical vulnerabilities found by Snyk — deployment continues'
+            echo '⚠️  WARNING: High/Critical vulnerabilities found by Snyk — deployment continues'
             unstable('Snyk found High/Critical vulnerabilities')
         } else {
             echo ' Snyk scan passed'
@@ -366,8 +399,12 @@ def analyzeTrivyReport() {
 
     trivyReport.Results?.each { result ->
         result.Vulnerabilities?.each { vuln ->
-            if (vuln.Severity == 'CRITICAL') criticalCount++
-            if (vuln.Severity == 'HIGH')     highCount++
+            if (vuln.Severity == 'CRITICAL') {
+                criticalCount++
+            }
+            if (vuln.Severity == 'HIGH') {
+                highCount++
+            }
         }
     }
 
@@ -473,21 +510,21 @@ def verifyDeployment() {
 }
 
 def cleanupOldImages() {
-    sh '''
-        OLD_IMAGES=$(aws ecr list-images \
-            --repository-name $ECR_REPO \
+    sh """
+        OLD_IMAGES=\$(aws ecr list-images \
+            --repository-name \$ECR_REPO \
             --filter tagStatus=TAGGED \
-            --query 'imageIds[10:]' \
+            --query "imageIds[${env.IMAGES_TO_KEEP}:]" \
             --output json)
 
-        if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
-            echo "Deleting old images..."
+        if [ "\$OLD_IMAGES" != "[]" ] && [ "\$OLD_IMAGES" != "null" ]; then
+            echo "Deleting old images (keeping ${env.IMAGES_TO_KEEP} most recent)..."
             aws ecr batch-delete-image \
-                --repository-name $ECR_REPO \
-                --image-ids "$OLD_IMAGES" || true
+                --repository-name \$ECR_REPO \
+                --image-ids "\$OLD_IMAGES" || true
             echo "Old images cleaned up"
         else
             echo "No old images to clean up"
         fi
-    '''
+    """
 }

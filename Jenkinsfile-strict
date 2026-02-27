@@ -1,8 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// VERSION 2: STRICT (FAIL-FAST)
-// Any security finding at HIGH or CRITICAL severity immediately fails the build
-// with error(). No catchError wrapping on scan stages — a failure here means
-// the pipeline stops and never reaches Push → Deploy → Verify.
+// VERSION 2: FAIL-FAST
+// Any security scan failure immediately fails the build and blocks deployment.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pipeline {
@@ -13,19 +11,61 @@ pipeline {
     }
 
     environment {
-        AWS_REGION       = 'eu-central-1'
-        ECR_REGISTRY     = '962496666337.dkr.ecr.eu-central-1.amazonaws.com'
-        IMAGE_TAG        = "${BUILD_NUMBER}"
-        ECR_REPO         = 'jenkins-cicd-pipeline-app'
-        ECS_CLUSTER      = 'jenkins-cicd-pipeline-cluster'
-        ECS_SERVICE      = 'jenkins-cicd-pipeline-service'
-        ECS_TASK_FAMILY  = 'jenkins-cicd-pipeline-task'
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
 
         // ─────────────────────────────────────────────
-        // 1. CHECKOUT
+        // 1. CONFIGURE ENVIRONMENT
+        // ─────────────────────────────────────────────
+        stage('Configure Environment') {
+            steps {
+                script {
+                    def params = sh(
+                        script: '''aws ssm get-parameters-by-path --path /jenkins/cicd/ \
+                               --query 'Parameters[*].{Name:Name,Value:Value}' --output json''',
+                        returnStdout: true
+                    ).trim()
+
+                    def parsed = readJSON text: params
+
+                    if (!parsed || parsed.size() == 0) {
+                        error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
+                    }
+
+                    def ssm = parsed.collectEntries {
+                        def key = it.Name.replace('/jenkins/cicd/', '')
+                        [(key): it.Value]
+                    }
+
+                    echo "Parsed SSM map: ${ssm}"
+
+                    env.AWS_REGION      = ssm['aws-region']
+                    env.ECR_REPO        = ssm['ecr-repo']
+                    env.ECS_CLUSTER     = ssm['ecs-cluster']
+                    env.ECS_SERVICE     = ssm['ecs-service']
+                    env.ECS_TASK_FAMILY = ssm['ecs-task-family']
+                    env.SONAR_PROJECT   = ssm['sonar-project']
+                    env.SONAR_ORG       = ssm['sonar-org']
+                    env.IMAGES_TO_KEEP  = ssm['images-to-keep']
+                    env.ECR_REGISTRY    = sh(
+                        script: 'aws sts get-caller-identity --query Account --output text',
+                        returnStdout: true
+                    ).trim() + ".dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+
+                    echo "Environment configured from SSM (1 API call)"
+                    echo "AWS_REGION: ${env.AWS_REGION}"
+                    echo "ECR_REPO: ${env.ECR_REPO}"
+                    echo "ECR_REGISTRY: ${env.ECR_REGISTRY}"
+                    echo "ECS_CLUSTER: ${env.ECS_CLUSTER}"
+                    echo "ECS_SERVICE: ${env.ECS_SERVICE}"
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────
+        // 2. CHECKOUT
         // ─────────────────────────────────────────────
         stage('Checkout') {
             steps {
@@ -35,7 +75,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 2. SECRET SCANNING — BLOCKS on any finding
+        // 3. SECRET SCANNING (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Secret Scanning') {
             steps {
@@ -54,7 +94,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 3. INSTALL DEPENDENCIES
+        // 4. INSTALL DEPENDENCIES
         // ─────────────────────────────────────────────
         stage('Install Dependencies') {
             steps {
@@ -64,7 +104,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 4. SAST - SONARQUBE — BLOCKS on gate failure
+        // 5. SAST - SONARQUBE (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('SAST - SonarQube') {
             steps {
@@ -76,7 +116,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 5. SCA - DEPENDENCY CHECK — BLOCKS on HIGH+
+        // 6. SCA - DEPENDENCY CHECK (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('SCA - Dependency Check') {
             steps {
@@ -89,7 +129,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 6. UNIT TESTS
+        // 7. UNIT TESTS
         // ─────────────────────────────────────────────
         stage('Unit Tests') {
             steps {
@@ -99,7 +139,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 7. BUILD DOCKER IMAGE
+        // 8. BUILD DOCKER IMAGE
         // ─────────────────────────────────────────────
         stage('Build Docker Image') {
             steps {
@@ -112,7 +152,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 8. GENERATE SBOM
+        // 9. GENERATE SBOM
         // ─────────────────────────────────────────────
         stage('Generate SBOM') {
             steps {
@@ -131,7 +171,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 9. CONTAINER IMAGE SCAN - TRIVY — BLOCKS on CRITICAL/HIGH
+        // 10. CONTAINER IMAGE SCAN - TRIVY (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Container Image Scan') {
             steps {
@@ -152,16 +192,16 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 10. QUALITY GATE — only reached if all scans passed
+        // 11. QUALITY GATE (FAIL-FAST)
         // ─────────────────────────────────────────────
         stage('Quality Gate Check') {
             steps {
-                echo ' All security quality gates passed — proceeding to deployment'
+                echo 'Fail-fast mode: all security gates must pass before deployment'
             }
         }
 
         // ─────────────────────────────────────────────
-        // 11. PUSH TO ECR
+        // 12. PUSH TO ECR
         // ─────────────────────────────────────────────
         stage('Push to ECR') {
             steps {
@@ -173,7 +213,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 12. UPDATE ECS TASK DEFINITION
+        // 13. UPDATE ECS TASK DEFINITION
         // ─────────────────────────────────────────────
         stage('Update ECS Task Definition') {
             steps {
@@ -185,7 +225,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 13. DEPLOY TO ECS
+        // 14. DEPLOY TO ECS
         // ─────────────────────────────────────────────
         stage('Deploy to ECS') {
             steps {
@@ -197,7 +237,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 14. VERIFY DEPLOYMENT
+        // 15. VERIFY DEPLOYMENT
         // ─────────────────────────────────────────────
         stage('Verify Deployment') {
             steps {
@@ -209,7 +249,7 @@ pipeline {
         }
 
         // ─────────────────────────────────────────────
-        // 15. CLEANUP OLD ECR IMAGES
+        // 16. CLEANUP OLD ECR IMAGES
         // ─────────────────────────────────────────────
         stage('Cleanup Old Images') {
             steps {
@@ -255,18 +295,18 @@ pipeline {
             echo "Pipeline completed successfully! Build #${BUILD_NUMBER} deployed to ECS."
             script {
                 def message = """
-                 Deployment Successful (Strict Mode)
+                 Deployment Successful (Fail-Fast Mode)
 
                 Build:       #${BUILD_NUMBER}
                 Image:       ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
                 ECS Cluster: ${ECS_CLUSTER}
                 ECS Service: ${ECS_SERVICE}
 
-                All security gates passed with zero HIGH/CRITICAL findings:
-                   Gitleaks  (Secret Scanning)
-                   SonarQube (SAST)
-                   npm audit + Snyk (SCA)
-                   Trivy     (Container Scan)
+                Security Scans (all passed — no findings blocked deployment):
+                  - Gitleaks  (Secret Scanning)
+                  - SonarQube (SAST)
+                  - npm audit + Snyk (SCA)
+                  - Trivy     (Container Scan)
 
                 Artifacts:
                   - SBOM (CycloneDX & SPDX)
@@ -277,44 +317,26 @@ pipeline {
         }
 
         failure {
-            echo ' Pipeline FAILED!'
-            script {
-                def failureReason = """
-                DEPLOYMENT BLOCKED
-
-                The pipeline was halted by a security gate failure or build error.
-                Review the stage logs and security reports to identify the cause.
-
-                Common causes:
-                  - Secrets detected by Gitleaks
-                  - SonarQube quality gate failed
-                  - HIGH/CRITICAL CVEs found by npm audit or Snyk
-                  - HIGH/CRITICAL CVEs found by Trivy in the container image
-                """
-                echo failureReason
-            }
+            echo " Pipeline FAILED — security gate blocked deployment. Review reports before retrying."
         }
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS — STRICT VARIANTS
-// error() immediately fails and stops the pipeline.
-// returnStatus: true is used on sh() calls so we can inspect exit codes
-// ourselves rather than letting a non-zero exit bubble up uncontrolled.
+// HELPER FUNCTIONS — FAIL-FAST VARIANTS
+// error() stops the pipeline immediately on any finding.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 def checkGitleaksReport() {
     if (fileExists('gitleaks-report.json')) {
         def report = readJSON file: 'gitleaks-report.json'
         if (report && report.size() > 0) {
-            error("🚫 BLOCKED: ${report.size()} secret(s) detected by Gitleaks. " +
-                  "Fix all secrets before merging. Review gitleaks-report.json for details.")
+            error(" BLOCKED: ${report.size()} secret(s) detected — fix before deploying. Review gitleaks-report.json")
         } else {
             echo ' No secrets detected'
         }
     } else {
-        echo '  No Gitleaks report found — skipping secret check'
+        echo ' No Gitleaks report found — skipping secret check'
     }
 }
 
@@ -322,8 +344,8 @@ def runSonarQubeScan() {
     withSonarQubeEnv('SonarQube') {
         sh '''
             sonar-scanner \
-                -Dsonar.projectKey=cicd-node-app \
-                -Dsonar.organization=asheryram \
+                -Dsonar.projectKey=$SONAR_PROJECT \
+                -Dsonar.organization=$SONAR_ORG \
                 -Dsonar.sources=. \
                 -Dsonar.exclusions=node_modules/**,test/**
         '''
@@ -331,83 +353,58 @@ def runSonarQubeScan() {
     timeout(time: 5, unit: 'MINUTES') {
         def qg = waitForQualityGate()
         if (qg.status != 'OK') {
-            error(" BLOCKED: SonarQube quality gate failed with status: ${qg.status}. " +
-                  "Fix all code quality issues before deploying.")
+            error(" BLOCKED: SonarQube quality gate failed: ${qg.status} — fix issues before deploying")
+        } else {
+            echo ' SAST passed'
         }
     }
-    echo ' SAST passed'
 }
 
 def runNpmAudit() {
-    // Always write the full JSON report regardless of outcome
     sh 'npm audit --json > npm-audit-report.json || true'
-
-    // Use returnStatus so we control the failure message
     def exitCode = sh(script: 'npm audit --audit-level=high', returnStatus: true)
     if (exitCode != 0) {
-        error(' BLOCKED: npm audit found HIGH or CRITICAL vulnerabilities in dependencies. ' +
-              'Run "npm audit fix" or update affected packages before deploying.')
+        error(" BLOCKED: High/Critical vulnerabilities found by npm audit — fix before deploying")
+    } else {
+        echo ' npm audit passed'
     }
-    echo ' npm audit passed'
 }
 
 def runSnykScan() {
     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-        // Always write the full JSON report regardless of outcome
         sh 'npx snyk test --json > snyk-report.json || true'
-
-        // Use returnStatus so we control the failure message
         def exitCode = sh(script: 'npx snyk test --severity-threshold=high', returnStatus: true)
         if (exitCode != 0) {
-            error(' BLOCKED: Snyk found HIGH or CRITICAL vulnerabilities in dependencies. ' +
-                  'Review snyk-report.json and remediate all HIGH/CRITICAL issues before deploying.')
+            error(" BLOCKED: High/Critical vulnerabilities found by Snyk — fix before deploying")
+        } else {
+            echo ' Snyk scan passed'
         }
     }
-    echo ' Snyk scan passed'
 }
 
 def analyzeTrivyReport() {
     def trivyReport = readJSON file: 'trivy-report.json'
     def criticalCount = 0
     def highCount = 0
-    def criticalVulns = []
-    def highVulns = []
 
     trivyReport.Results?.each { result ->
         result.Vulnerabilities?.each { vuln ->
-            if (vuln.Severity == 'CRITICAL') {
-                criticalCount++
-                criticalVulns << "${vuln.VulnerabilityID} in ${vuln.PkgName} (${vuln.InstalledVersion})"
-            }
-            if (vuln.Severity == 'HIGH') {
-                highCount++
-                highVulns << "${vuln.VulnerabilityID} in ${vuln.PkgName} (${vuln.InstalledVersion})"
-            }
+            if (vuln.Severity == 'CRITICAL') criticalCount++
+            if (vuln.Severity == 'HIGH')     highCount++
         }
     }
 
     echo "Trivy found: ${criticalCount} Critical, ${highCount} High vulnerabilities"
 
-    if (criticalCount > 0) {
-        echo "Critical CVEs found:"
-        criticalVulns.take(10).each { echo "  - ${it}" }
-    }
-    if (highCount > 0) {
-        echo "High CVEs found:"
-        highVulns.take(10).each { echo "  - ${it}" }
-    }
-
     if (criticalCount > 0 || highCount > 0) {
-        error(" BLOCKED: Trivy found ${criticalCount} CRITICAL and ${highCount} HIGH vulnerabilities " +
-              "in the container image. Update base image and dependencies before deploying. " +
-              "Review trivy-report.json for full details.")
+        error(" BLOCKED: ${criticalCount} Critical and ${highCount} High vulnerabilities found — fix before deploying")
+    } else {
+        echo ' Container scan passed'
     }
-
-    echo ' Container scan passed'
 }
 
 // ─────────────────────────────────────────────
-// SHARED DEPLOY HELPERS (identical in both versions)
+// SHARED DEPLOY HELPERS
 // ─────────────────────────────────────────────
 
 def pushToECR() {
@@ -498,21 +495,22 @@ def verifyDeployment() {
 }
 
 def cleanupOldImages() {
-    sh '''
-        OLD_IMAGES=$(aws ecr list-images \
-            --repository-name $ECR_REPO \
+    def keepCount = env.IMAGES_TO_KEEP ?: '5'
+    sh """
+        OLD_IMAGES=\$(aws ecr list-images \
+            --repository-name \$ECR_REPO \
             --filter tagStatus=TAGGED \
-            --query 'imageIds[10:]' \
+            --query 'imageIds[${keepCount}:]' \
             --output json)
 
-        if [ "$OLD_IMAGES" != "[]" ] && [ "$OLD_IMAGES" != "null" ]; then
-            echo "Deleting old images..."
+        if [ "\$OLD_IMAGES" != "[]" ] && [ "\$OLD_IMAGES" != "null" ]; then
+            echo "Deleting old images (keeping ${keepCount} most recent)..."
             aws ecr batch-delete-image \
-                --repository-name $ECR_REPO \
-                --image-ids "$OLD_IMAGES" || true
+                --repository-name \$ECR_REPO \
+                --image-ids "\$OLD_IMAGES" || true
             echo "Old images cleaned up"
         else
             echo "No old images to clean up"
         fi
-    '''
+    """
 }
