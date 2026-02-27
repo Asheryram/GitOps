@@ -12,18 +12,8 @@ pipeline {
         nodejs 'nodejs-20'
     }
 
-    environment {
-        // These will be loaded from SSM Parameter Store
-        AWS_REGION       = ''
-        ECR_REGISTRY     = ''
-        IMAGE_TAG        = "${BUILD_NUMBER}"
-        ECR_REPO         = ''
-        ECS_CLUSTER      = ''
-        ECS_SERVICE      = ''
-        ECS_TASK_FAMILY  = ''
-        SONAR_PROJECT    = ''
-        SONAR_ORG        = ''
-        IMAGES_TO_KEEP   = ''
+   environment {
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
