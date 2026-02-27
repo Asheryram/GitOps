@@ -47,15 +47,11 @@ pipeline {
                     if (!parsed || parsed.size() == 0) {
                         error("No SSM parameters found at /jenkins/cicd/. Run 'terraform apply' to create them.")
                     }
-                    
-                    def ssm = [:]
-                    parsed.each { param ->
-                        def key = param.Name.tokenize('/').last()
-                        ssm[key] = param.Value
-                    }
-                    
+                    def ssm = parsed.collectEntries { 
+                         def key = it.Name.replace('/jenkins/cicd/', '')
+                         [(key): it.Value] 
+                    }                
                     echo "Parsed SSM map: ${ssm}"
-
                     env.AWS_REGION      = ssm['aws-region']
                     env.ECR_REPO        = ssm['ecr-repo']
                     env.ECS_CLUSTER     = ssm['ecs-cluster']
