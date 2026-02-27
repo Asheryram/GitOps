@@ -57,6 +57,11 @@ pipeline {
                     ).trim() + ".dkr.ecr.${env.AWS_REGION}.amazonaws.com"
 
                     echo "Environment configured from SSM (1 API call)"
+                    echo "AWS_REGION: ${env.AWS_REGION}"
+                    echo "ECR_REPO: ${env.ECR_REPO}"
+                    echo "ECR_REGISTRY: ${env.ECR_REGISTRY}"
+                    echo "ECS_CLUSTER: ${env.ECS_CLUSTER}"
+                    echo "ECS_SERVICE: ${env.ECS_SERVICE}"
                 }
             }
         }
