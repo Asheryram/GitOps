@@ -551,8 +551,8 @@ Fix before next release.
                 def isAppIssue = env.FINAL_FAILURE_TYPE == 'APP_CRITICAL'
                 def channel    = isAppIssue ? env.SLACK_APP_CHANNEL : env.SLACK_DEVOPS_CHANNEL
                 def issueLabel = isAppIssue
-                    ? '🔴 Application Issue (Critical)'
-                    : '⚙️ Pipeline / Infrastructure Issue'
+                    ? ' Application Issue (Critical)'
+                    : ' Pipeline / Infrastructure Issue'
                 def actionLine = isAppIssue
                     ? 'Fix the critical findings in the code or dependencies before retrying.'
                     : 'Check AWS credentials, Docker, ECS configuration, or Jenkins setup.'
@@ -570,7 +570,7 @@ Fix before next release.
                     channel: channel,
                     color: 'danger',
                     message: """
-❌ *Deployment FAILED*
+ *Deployment FAILED*
 
 *Build:*        #${BUILD_NUMBER}
 *Branch:*       ${env.GIT_BRANCH ?: 'N/A'}
@@ -612,7 +612,7 @@ def checkGitleaksReport() {
             env.FAILURE_TYPE    = 'APP_CRITICAL'
             env.FAILURE_STAGE   = 'Secret Scanning'
             env.FAILURE_REASON  = "${report.size()} secret(s) detected in source code"
-            env.VULN_COUNTS     = "🔴 Secrets found: ${report.size()}"
+            env.VULN_COUNTS     = " Secrets found: ${report.size()}"
             env.FAILURE_SUMMARY = details + more
             error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         } else {
@@ -630,7 +630,8 @@ def runSonarQubeScan() {
                 -Dsonar.projectKey=$SONAR_PROJECT \
                 -Dsonar.organization=$SONAR_ORG \
                 -Dsonar.sources=. \
-                -Dsonar.exclusions=node_modules/**,test/**
+                -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/** \
+                -Dsonar.qualitygate.wait=false
         '''
     }
     timeout(time: 5, unit: 'MINUTES') {
@@ -639,7 +640,7 @@ def runSonarQubeScan() {
             env.FAILURE_TYPE    = 'APP_CRITICAL'
             env.FAILURE_STAGE   = 'SAST - SonarQube'
             env.FAILURE_REASON  = "Quality gate status: ERROR — critical code issues must be fixed"
-            env.VULN_COUNTS     = "🔴 SonarQube Gate: ERROR"
+            env.VULN_COUNTS     = " SonarQube Gate: ERROR"
             env.FAILURE_SUMMARY = "• Quality gate returned ERROR status\n• Fix all Blocker and Critical issues\n• Review full findings at the SonarQube dashboard"
             error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         } else if (qg.status != 'OK') {
@@ -673,7 +674,7 @@ def runNpmAudit() {
         env.FAILURE_TYPE    = 'APP_CRITICAL'
         env.FAILURE_STAGE   = 'SCA - npm audit'
         env.FAILURE_REASON  = "${criticalList.size()} CRITICAL CVEs found by npm audit"
-        env.VULN_COUNTS     = "🔴 Critical: ${criticalList.size()} | 🟠 High: ${vulns.findAll { k, v -> v.severity == 'high' }.size()} | 🟡 Medium: ${vulns.findAll { k, v -> v.severity == 'moderate' }.size()}"
+        env.VULN_COUNTS     = " Critical: ${criticalList.size()} |  High: ${vulns.findAll { k, v -> v.severity == 'high' }.size()} |  Medium: ${vulns.findAll { k, v -> v.severity == 'moderate' }.size()}"
         env.FAILURE_SUMMARY = details + more
         error("[APP_CRITICAL] ${env.FAILURE_REASON}")
     }
@@ -693,7 +694,7 @@ def runNpmAudit() {
         env.FAILURE_TYPE    = 'APP_UNSTABLE'
         env.FAILURE_STAGE   = 'SCA - npm audit'
         env.FAILURE_REASON  = "${highList.size()} High CVEs found by npm audit"
-        env.VULN_COUNTS     = "🟠 High: ${highList.size()} | 🟡 Medium: ${vulns.findAll { k, v -> v.severity == 'moderate' }.size()}"
+        env.VULN_COUNTS     = " High: ${highList.size()} |  Medium: ${vulns.findAll { k, v -> v.severity == 'moderate' }.size()}"
         env.FAILURE_SUMMARY = details + more
         unstable(env.FAILURE_REASON)
     } else {
@@ -721,7 +722,7 @@ def runSnykScan() {
             env.FAILURE_TYPE    = 'APP_CRITICAL'
             env.FAILURE_STAGE   = 'SCA - Snyk'
             env.FAILURE_REASON  = "${criticalList.size()} CRITICAL CVEs found by Snyk"
-            env.VULN_COUNTS     = "🔴 Critical: ${criticalList.size()} | 🟠 High: ${vulns.findAll { it.severity == 'high' }.size()} | 🟡 Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
+            env.VULN_COUNTS     = " Critical: ${criticalList.size()} |  High: ${vulns.findAll { it.severity == 'high' }.size()} |  Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
             env.FAILURE_SUMMARY = details + more
             error("[APP_CRITICAL] ${env.FAILURE_REASON}")
         }
@@ -741,7 +742,7 @@ def runSnykScan() {
             env.FAILURE_TYPE    = 'APP_UNSTABLE'
             env.FAILURE_STAGE   = 'SCA - Snyk'
             env.FAILURE_REASON  = "${highList.size()} High CVEs found by Snyk"
-            env.VULN_COUNTS     = "🟠 High: ${highList.size()} | 🟡 Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
+            env.VULN_COUNTS     = " High: ${highList.size()} |  Medium: ${vulns.findAll { it.severity == 'medium' }.size()}"
             env.FAILURE_SUMMARY = details + more
             unstable(env.FAILURE_REASON)
         } else {
@@ -785,7 +786,7 @@ def analyzeTrivyReport() {
         env.FAILURE_TYPE    = 'APP_CRITICAL'
         env.FAILURE_STAGE   = 'Container Image Scan'
         env.FAILURE_REASON  = "${criticalCount} CRITICAL CVEs found in container image"
-        env.VULN_COUNTS     = "🔴 Critical: ${criticalCount} | 🟠 High: ${highCount} | 🟡 Medium: ${mediumCount} | ⚪ Low: ${lowCount}"
+        env.VULN_COUNTS     = " Critical: ${criticalCount} |  High: ${highCount} |  Medium: ${mediumCount} |  Low: ${lowCount}"
         env.FAILURE_SUMMARY = details + more
         error("[APP_CRITICAL] ${env.FAILURE_REASON}")
     } else if (highCount > 0 || mediumCount > 0) {
@@ -795,7 +796,7 @@ def analyzeTrivyReport() {
         env.FAILURE_TYPE    = 'APP_UNSTABLE'
         env.FAILURE_STAGE   = 'Container Image Scan'
         env.FAILURE_REASON  = "${highCount} High and ${mediumCount} Medium CVEs found in container image"
-        env.VULN_COUNTS     = "🟠 High: ${highCount} | 🟡 Medium: ${mediumCount} | ⚪ Low: ${lowCount}"
+        env.VULN_COUNTS     = " High: ${highCount} |  Medium: ${mediumCount} |  Low: ${lowCount}"
         env.FAILURE_SUMMARY = details + more
         unstable(env.FAILURE_REASON)
     } else {
