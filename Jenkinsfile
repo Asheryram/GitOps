@@ -192,8 +192,6 @@ pipeline {
                                 sonar-scanner \
                                     -Dsonar.projectKey=$SONAR_PROJECT \
                                     -Dsonar.organization=$SONAR_ORG \
-                                    -Dsonar.sources=. \
-                                    -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/** \
                                     -Dsonar.qualitygate.wait=false
                             '''
                         }
